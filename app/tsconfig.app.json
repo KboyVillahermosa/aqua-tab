@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "skipLibCheck": true,
+    "baseUrl": "./",
+    "paths": {
+      "@/*": ["./app/*"]
+    }
+  },
+  "include": ["app/**/*", "typings.d.ts"],
+  "exclude": ["app-example", "node_modules", "build"]
+}
