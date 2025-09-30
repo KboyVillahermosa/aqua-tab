@@ -7,6 +7,7 @@ use App\Models\User;
 
 Route::post('register', [AuthController::class, 'register']);
 Route::post('login', [AuthController::class, 'login']);
+Route::post('oauth/google', [AuthController::class, 'google']);
 
 // simple token guard middleware inline: expects header 'Authorization: Bearer {token}'
 Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
