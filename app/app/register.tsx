@@ -52,7 +52,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 20, justifyContent: 'center' },
   title: { fontSize: 26, marginBottom: 20, textAlign: 'center' },
   input: { borderWidth: 1, borderColor: '#ddd', padding: 12, borderRadius: 6, marginBottom: 12 },
-  button: { backgroundColor: '#007AFF', padding: 12, borderRadius: 6, alignItems: 'center' },
+  button: { backgroundColor: '#007AFF', padding: 12, borderRadius: 5, alignItems: 'center' },
   buttonText: { color: '#fff', fontWeight: '600' },
   linkContainer: { marginTop: 16, alignItems: 'center' },
   link: { color: '#007AFF' },

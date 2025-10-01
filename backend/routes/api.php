@@ -14,7 +14,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::get('me', [AuthController::class, 'me']);
 });
 
-// If the app doesn't have the middleware registered, add a fallback route to demonstrate
+
 Route::get('ping', function () {
     return response()->json(['pong' => true]);
 });
