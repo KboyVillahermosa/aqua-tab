@@ -59,7 +59,7 @@ export default function Home() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, padding: 20, justifyContent: 'center', backgroundColor: '#f7f7fb' },
+  screen: { flex: 1, padding: 15, justifyContent: 'center', backgroundColor: '#f7f7fb' },
   card: { backgroundColor: '#fff', borderRadius: 12, padding: 20, flexDirection: 'row', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 10, elevation: 3 },
   avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
   avatarText: { color: '#fff', fontWeight: '700', fontSize: 20 },
