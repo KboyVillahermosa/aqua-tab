@@ -57,6 +57,13 @@ class AdminController extends Controller
         return view('admin.users.create');
     }
 
+    // Users index (list) - alias to dashboard user list
+    public function index()
+    {
+        $users = User::paginate(10);
+        return view('admin.dashboard', compact('users'));
+    }
+
     public function storeUser(Request $request)
     {
         $validated = $request->validate([

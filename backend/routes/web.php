@@ -3,11 +3,22 @@
 use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\AdminController;
 
+// Simple API status route for web access
 Route::get('/', function () {
-    return view('welcome');
+    return response()->json([
+        'message' => 'Aqua API Backend',
+        'status' => 'active',
+        'version' => '1.0.0'
+    ]);
 });
 
-// Admin routes
+// Provide a global `login` route so auth middleware can redirect unauthenticated users.
+// We redirect to the admin login form by default.
+Route::get('login', function () {
+    return redirect()->route('admin.login');
+})->name('login');
+
+// Admin routes (for web-based admin panel)
 Route::prefix('admin')->name('admin.')->group(function () {
     // Guest admin routes (login form)
     Route::middleware('guest')->group(function () {
@@ -21,6 +32,7 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('logout', [AdminController::class, 'logout'])->name('logout');
         
         // User management
+    Route::get('users', [AdminController::class, 'index'])->name('users.index');
         Route::get('users/create', [AdminController::class, 'createUser'])->name('users.create');
         Route::post('users', [AdminController::class, 'storeUser'])->name('users.store');
         Route::get('users/{user}/edit', [AdminController::class, 'editUser'])->name('users.edit');
