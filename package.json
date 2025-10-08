@@ -1,0 +1,11 @@
+{
+  "name": "aqua-tab",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "npm --prefix app start",
+    "start:app": "npm --prefix app start",
+    "start:backend": "npm --prefix backend run dev",
+    "install:all": "npm --prefix app install && npm --prefix backend install"
+  }
+}
