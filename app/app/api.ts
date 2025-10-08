@@ -1,4 +1,4 @@
-const BASE_URL = 'http://10.0.2.2:8000/api'; // use emulator host for localhost; adjust as needed
+const BASE_URL = 'https://abcd-1234.ngrok-free.app/api'; // use emulator host for localhost; adjust as needed
 
 async function parseResponse(res: Response) {
   // Try JSON first, else return text
