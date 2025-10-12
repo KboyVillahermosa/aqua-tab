@@ -39,6 +39,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
       label: 'Categories',
       route: '/components/pages/category/Categories'
     },
+
     { 
       key: 'timeline', 
       icon: 'time', 
