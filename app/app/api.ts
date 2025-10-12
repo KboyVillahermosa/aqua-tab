@@ -43,4 +43,26 @@ export async function get(path: string, token?: string) {
   return data;
 }
 
+export async function put(path: string, body: any, token?: string) {
+  const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(joinPath(path), {
+    method: 'PUT',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const data = await parseResponse(res);
+  if (!res.ok) throw { status: res.status, data };
+  return data;
+}
+
+export async function del(path: string, token?: string) {
+  const headers: any = { Accept: 'application/json' };
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(joinPath(path), { method: 'DELETE', headers });
+  const data = await parseResponse(res);
+  if (!res.ok) throw { status: res.status, data };
+  return data;
+}
+
 export default { post, get };

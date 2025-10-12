@@ -74,7 +74,8 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
   };
 
   return (
-    <View style={styles.bottomNav}>
+    // allow touches to pass through areas not occupied by the nav (helpful for overlapping layouts)
+    <View style={styles.bottomNav} pointerEvents="box-none">
       {navigationItems.map((item) => (
         <TouchableOpacity
           key={item.key}
