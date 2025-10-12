@@ -26,7 +26,7 @@ export default function Profile() {
     const fetchUserData = async () => {
       try {
         console.log('Profile: Making API call with token:', token);
-        const response = await fetch('http://10.0.2.2:8000/api/me', {
+        const response = await fetch('https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api/me', {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
