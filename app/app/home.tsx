@@ -99,7 +99,7 @@ export default function Home() {
             <Text style={styles.categoryText}>Medication</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.categoryCard}>
+          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}>
             <Ionicons name="water" size={32} color="white" />
             <Text style={styles.categoryText}>Hydration</Text>
           </TouchableOpacity>
