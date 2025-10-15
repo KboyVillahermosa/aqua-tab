@@ -1,0 +1,12 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "a4dae528-493e-4ad4-a2e2-b80dddba7518"
+      }
+    },
+    "android": {
+      "package": "com.reinand_servano.aquatab"
+    }
+  }
+}

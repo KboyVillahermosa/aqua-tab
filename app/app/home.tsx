@@ -94,7 +94,7 @@ export default function Home() {
         </View>
 
         <View style={styles.categoriesGrid}>
-          <TouchableOpacity style={styles.categoryCard}>
+          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}>
             <Ionicons name="medical" size={32} color="white" />
             <Text style={styles.categoryText}>Medication</Text>
           </TouchableOpacity>
