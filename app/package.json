@@ -18,12 +18,8 @@
     "@react-navigation/bottom-tabs": "^7.4.0",
     "@react-navigation/elements": "^2.6.3",
     "@react-navigation/native": "^7.1.8",
-<<<<<<< HEAD
     "aqua-tab": "file:..",
     "expo": "~54.0.10",
-=======
-    "expo": "54.0.13",
->>>>>>> adc26a0423b4c000c532f0009fde10b87f5b8708
     "expo-auth-session": "^7.0.8",
     "expo-constants": "~18.0.9",
     "expo-device": "~8.0.9",
