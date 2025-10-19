@@ -192,4 +192,120 @@ class MedicationController extends Controller
 
         return response()->json($stats);
     }
+
+    /**
+     * Get admin statistics for medication management
+     */
+    public function getAdminStats(Request $request)
+    {
+        $days = (int) $request->query('days', 30);
+        if (!in_array($days, [7, 30, 90])) {
+            $days = 30;
+        }
+
+        try {
+            $startDate = now()->subDays($days);
+            
+            // Get all medications
+            $totalMedications = Medication::count();
+            $activeMedications = Medication::where('reminder', true)->count();
+            
+            // Calculate adherence rate
+            $totalHistory = MedicationHistory::where('created_at', '>=', $startDate)->count();
+            $takenHistory = MedicationHistory::where('created_at', '>=', $startDate)
+                ->where('status', 'completed')
+                ->count();
+            $adherenceRate = $totalHistory > 0 ? round(($takenHistory / $totalHistory) * 100, 1) : 0;
+            
+            // Count upcoming doses (medications scheduled for today)
+            $upcomingDoses = 0;
+            $medications = Medication::where('reminder', true)->get();
+            foreach ($medications as $med) {
+                $times = $med->times ?? [];
+                $upcomingDoses += count($times);
+            }
+            
+            // Count missed doses
+            $missedDoses = MedicationHistory::where('created_at', '>=', $startDate)
+                ->where('status', 'skipped')
+                ->count();
+            
+            // Medication types distribution
+            $medicationTypes = Medication::selectRaw('name, COUNT(*) as count')
+                ->groupBy('name')
+                ->orderBy('count', 'desc')
+                ->limit(10)
+                ->get()
+                ->map(function ($item) {
+                    return [
+                        'type' => $item->name,
+                        'count' => $item->count
+                    ];
+                });
+            
+            // Weekly adherence trend
+            $weeklyTrend = [];
+            $weeks = ceil($days / 7);
+            for ($w = $weeks - 1; $w >= 0; $w--) {
+                $weekStart = now()->subWeeks($w)->startOfWeek();
+                $weekEnd = now()->subWeeks($w)->endOfWeek();
+                
+                $weekTotal = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])->count();
+                $weekTaken = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])
+                    ->where('status', 'completed')
+                    ->count();
+                
+                $weekAdherence = $weekTotal > 0 ? round(($weekTaken / $weekTotal) * 100, 1) : 0;
+                
+                $weeklyTrend[] = [
+                    'week' => $weekStart->format('M j'),
+                    'adherence_rate' => $weekAdherence
+                ];
+            }
+            
+            // Recent medication history
+            $recentHistory = MedicationHistory::with(['medication.user'])
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get()
+                ->map(function ($entry) {
+                    return [
+                        'user_name' => $entry->medication->user->name ?? 'Unknown User',
+                        'medication_name' => $entry->medication->name ?? 'Unknown Medication',
+                        'dosage' => $entry->medication->dosage ?? '',
+                        'status' => $entry->status,
+                        'scheduled_time' => $entry->created_at->toISOString(),
+                        'taken_time' => $entry->status === 'completed' ? $entry->created_at->toISOString() : null
+                    ];
+                });
+
+            return response()->json([
+                'active_medications' => $activeMedications,
+                'adherence_rate' => $adherenceRate,
+                'upcoming_doses' => $upcomingDoses,
+                'missed_doses' => $missedDoses,
+                'taken_count' => $takenHistory,
+                'missed_count' => $missedDoses,
+                'snoozed_count' => 0, // Not implemented yet
+                'medication_types' => $medicationTypes,
+                'weekly_adherence' => $weeklyTrend,
+                'recent_history' => $recentHistory
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Medication admin stats error', ['error' => $e->getMessage()]);
+            return response()->json([
+                'active_medications' => 0,
+                'adherence_rate' => 0,
+                'upcoming_doses' => 0,
+                'missed_doses' => 0,
+                'taken_count' => 0,
+                'missed_count' => 0,
+                'snoozed_count' => 0,
+                'medication_types' => [],
+                'weekly_adherence' => [],
+                'recent_history' => []
+            ], 500);
+        }
+    }
 }

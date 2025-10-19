@@ -4,9 +4,14 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use App\Models\User;
+use App\Models\HydrationEntry;
+use App\Models\Medication;
+use App\Models\MedicationHistory;
+use App\Models\Notification;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\Rule;
+use Carbon\Carbon;
 
 class AdminController extends Controller
 {
@@ -48,7 +53,7 @@ class AdminController extends Controller
 
     public function dashboard()
     {
-        $users = User::paginate(10);
+        $users = User::take(5)->get();
         return view('admin.dashboard', compact('users'));
     }
 
@@ -57,11 +62,56 @@ class AdminController extends Controller
         return view('admin.users.create');
     }
 
-    // Users index (list) - alias to dashboard user list
+    // Users index (list) - dedicated users page
     public function index()
     {
         $users = User::paginate(10);
-        return view('admin.dashboard', compact('users'));
+        return view('admin.users.index', compact('users'));
+    }
+
+    public function showUser(User $user)
+    {
+        // Get user's health data
+        $hydrationEntries = HydrationEntry::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+
+        $medications = Medication::where('user_id', $user->id)
+            ->where('is_active', true)
+            ->get();
+
+        $medicationHistory = MedicationHistory::where('user_id', $user->id)
+            ->orderBy('scheduled_time', 'desc')
+            ->limit(10)
+            ->get();
+
+        $notifications = Notification::where('user_id', $user->id)
+            ->orderBy('created_at', 'desc')
+            ->limit(10)
+            ->get();
+
+        // Calculate stats
+        $totalHydrationEntries = HydrationEntry::where('user_id', $user->id)->count();
+        $totalMedicationEntries = MedicationHistory::where('user_id', $user->id)->count();
+        $totalNotifications = Notification::where('user_id', $user->id)->count();
+        
+        // Get recent activity (last 7 days)
+        $recentActivity = HydrationEntry::where('user_id', $user->id)
+            ->where('created_at', '>=', Carbon::now()->subDays(7))
+            ->count();
+
+        return view('admin.users.show', compact(
+            'user', 
+            'hydrationEntries', 
+            'medications', 
+            'medicationHistory', 
+            'notifications',
+            'totalHydrationEntries',
+            'totalMedicationEntries',
+            'totalNotifications',
+            'recentActivity'
+        ));
     }
 
     public function storeUser(Request $request)
@@ -112,5 +162,73 @@ class AdminController extends Controller
 
         $user->delete();
         return redirect()->route('admin.dashboard')->with('success', 'User deleted successfully');
+    }
+
+    // Health module management methods
+    public function hydration()
+    {
+        return view('admin.hydration.index');
+    }
+
+    public function medication()
+    {
+        return view('admin.medication.index');
+    }
+
+    public function notifications()
+    {
+        return view('admin.notifications.index');
+    }
+
+    public function getDashboardStats()
+    {
+        try {
+            // Get basic counts
+            $activeHydrationUsers = HydrationEntry::where('created_at', '>=', Carbon::now()->subDays(7))
+                ->distinct('user_id')
+                ->count('user_id');
+
+            $activeMedications = Medication::where('reminder', true)->count();
+            $notificationsSent = Notification::count();
+
+            // Get hydration entries count
+            $hydrationEntries = HydrationEntry::count();
+
+            // Get medication entries count
+            $medicationEntries = MedicationHistory::count();
+
+            // Get user activity for last 7 days
+            $userActivity = [];
+            for ($i = 6; $i >= 0; $i--) {
+                $date = Carbon::now()->subDays($i)->format('Y-m-d');
+                $activeUsers = HydrationEntry::whereDate('created_at', $date)
+                    ->distinct('user_id')
+                    ->count('user_id');
+                
+                $userActivity[] = [
+                    'date' => Carbon::now()->subDays($i)->format('M j'),
+                    'active_users' => $activeUsers
+                ];
+            }
+
+            return response()->json([
+                'active_hydration_users' => $activeHydrationUsers,
+                'active_medications' => $activeMedications,
+                'notifications_sent' => $notificationsSent,
+                'hydration_entries' => $hydrationEntries,
+                'medication_entries' => $medicationEntries,
+                'user_activity' => $userActivity
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'active_hydration_users' => 0,
+                'active_medications' => 0,
+                'notifications_sent' => 0,
+                'hydration_entries' => 0,
+                'medication_entries' => 0,
+                'user_activity' => []
+            ], 500);
+        }
     }
 }

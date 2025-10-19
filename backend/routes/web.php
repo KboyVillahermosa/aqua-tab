@@ -32,11 +32,17 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::post('logout', [AdminController::class, 'logout'])->name('logout');
         
         // User management
-    Route::get('users', [AdminController::class, 'index'])->name('users.index');
+        Route::get('users', [AdminController::class, 'index'])->name('users.index');
         Route::get('users/create', [AdminController::class, 'createUser'])->name('users.create');
         Route::post('users', [AdminController::class, 'storeUser'])->name('users.store');
+        Route::get('users/{user}', [AdminController::class, 'showUser'])->name('users.show');
         Route::get('users/{user}/edit', [AdminController::class, 'editUser'])->name('users.edit');
         Route::put('users/{user}', [AdminController::class, 'updateUser'])->name('users.update');
         Route::delete('users/{user}', [AdminController::class, 'deleteUser'])->name('users.destroy');
+        
+        // Health module management
+        Route::get('hydration', [AdminController::class, 'hydration'])->name('hydration.index');
+        Route::get('medication', [AdminController::class, 'medication'])->name('medication.index');
+        Route::get('notifications', [AdminController::class, 'notifications'])->name('notifications.index');
     });
 });
