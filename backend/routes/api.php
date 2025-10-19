@@ -15,6 +15,8 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     // Medication endpoints
     Route::get('medications', [App\Http\Controllers\MedicationController::class, 'index']);
     Route::post('medications', [App\Http\Controllers\MedicationController::class, 'store']);
+    Route::get('medications/upcoming', [App\Http\Controllers\MedicationController::class, 'getUpcoming']);
+    Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getStats']);
     Route::get('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'show']);
     Route::put('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'update']);
     Route::delete('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'destroy']);

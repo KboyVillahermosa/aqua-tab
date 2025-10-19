@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, FlatList, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import DateTimePicker from '@react-native-community/datetimepicker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
@@ -13,6 +12,12 @@ type MedicationItem = {
   dosage: string;
   times: string[]; // ISO timestamps (time-of-day represented as ISO strings)
   reminder: boolean;
+  start_date?: string;
+  end_date?: string;
+  frequency?: 'daily' | 'weekly' | 'monthly' | 'custom';
+  days_of_week?: number[];
+  notes?: string;
+  color?: string;
 };
 
 type HistoryEntry = {
@@ -37,56 +42,43 @@ export default function Medication() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
   const [editing, setEditing] = useState<MedicationItem | null>(null);
+  const [stats, setStats] = useState<any>(null);
+  const [upcoming, setUpcoming] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // form state
   const [name, setName] = useState('');
   const [dosage, setDosage] = useState('');
   const [times, setTimes] = useState<string[]>([]);
-  const [showTimePicker, setShowTimePicker] = useState(false);
   const [pickerIndex, setPickerIndex] = useState<number | null>(null);
-  // Time picker modal state: we keep the native DateTimePicker at top-level
-  // (avoids Android Modal/Dialog conflicts) and use a friendly modal wrapper
-  // that lets users confirm/cancel selected times.
+  
+  // Advanced scheduling state
+  const [startDate, setStartDate] = useState(new Date().toISOString().split('T')[0]);
+  const [endDate, setEndDate] = useState('');
+  const [frequency, setFrequency] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
+  const [daysOfWeek, setDaysOfWeek] = useState<number[]>([]);
+  const [notes, setNotes] = useState('');
+  const [color, setColor] = useState('#1E3A8A');
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [datePickerType, setDatePickerType] = useState<'start' | 'end' | null>(null);
+  // Time picker modal state
   const [tempTime, setTempTime] = useState<Date | null>(null);
   const [timeModalVisible, setTimeModalVisible] = useState(false);
-  // Android JS fallback time parts
-  const [tempHour, setTempHour] = useState<number>(9);
-  const [tempMinute, setTempMinute] = useState<number>(0);
-  const [tempAm, setTempAm] = useState<boolean>(true);
-  const hourRef = useRef<ScrollView | null>(null);
-  const minuteRef = useRef<ScrollView | null>(null);
-  const amRef = useRef<ScrollView | null>(null);
   const MODAL_ANIM = useRef(new Animated.Value(0)).current;
-  const ITEM_HEIGHT = 44;
-
-  const hours = Array.from({ length: 12 }, (_, i) => i + 1);
-  const minutes = Array.from({ length: 60 }, (_, i) => i);
 
   useEffect(() => {
     if (timeModalVisible) {
-      // animate modal in
       Animated.timing(MODAL_ANIM, { toValue: 1, duration: 220, useNativeDriver: true }).start();
-      // initial wheel positions
-      setTimeout(() => {
-        if (hourRef.current && tempHour) {
-          hourRef.current.scrollTo({ y: (tempHour - 1) * 44, animated: false });
-        }
-        if (minuteRef.current) {
-          minuteRef.current.scrollTo({ y: tempMinute * 44, animated: false });
-        }
-        if (amRef.current) {
-          amRef.current.scrollTo({ y: tempAm ? 0 : 44, animated: false });
-        }
-      }, 10);
     } else {
       Animated.timing(MODAL_ANIM, { toValue: 0, duration: 180, useNativeDriver: true }).start();
     }
-  }, [timeModalVisible, MODAL_ANIM, tempHour, tempMinute, tempAm]);
+  }, [timeModalVisible, MODAL_ANIM]);
   const [reminder, setReminder] = useState(true);
 
   useEffect(() => {
     (async () => {
       try {
+        setLoading(true);
         if (token) {
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
@@ -105,6 +97,21 @@ export default function Medication() {
             }
           }
           setHistory(allHistory);
+
+          // Load stats and upcoming medications
+          try {
+            const statsData = await api.get('/medications/stats', token as string);
+            setStats(statsData);
+          } catch (e) {
+            console.log('Failed to load stats:', e);
+          }
+
+          try {
+            const upcomingData = await api.get('/medications/upcoming', token as string);
+            setUpcoming(upcomingData || []);
+          } catch (e) {
+            console.log('Failed to load upcoming:', e);
+          }
         } else {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
           const hraw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
@@ -113,6 +120,8 @@ export default function Medication() {
         }
       } catch {
         console.log('Failed to load meds');
+      } finally {
+        setLoading(false);
       }
     })();
   }, [token]);
@@ -132,6 +141,12 @@ export default function Medication() {
     setDosage('');
     setTimes([]);
     setReminder(true);
+    setStartDate(new Date().toISOString().split('T')[0]);
+    setEndDate('');
+    setFrequency('daily');
+    setDaysOfWeek([]);
+    setNotes('');
+    setColor('#1E3A8A');
     setModalVisible(true);
   }
 
@@ -141,12 +156,44 @@ export default function Medication() {
     setDosage(m.dosage);
     setTimes(m.times || []);
     setReminder(!!m.reminder);
+    setStartDate(m.start_date || new Date().toISOString().split('T')[0]);
+    setEndDate(m.end_date || '');
+    setFrequency(m.frequency || 'daily');
+    setDaysOfWeek(m.days_of_week || []);
+    setNotes(m.notes || '');
+    setColor(m.color || '#1E3A8A');
     setModalVisible(true);
   }
 
   function saveMedication() {
     if (!name.trim()) return Alert.alert('Validation', 'Please enter a name');
-  const med: MedicationItem = editing ? { ...editing, name, dosage, times, reminder } : { id: uid(), name, dosage, times, reminder };
+    if (!times.length) return Alert.alert('Validation', 'Please add at least one reminder time');
+    
+    const med: MedicationItem = editing ? { 
+      ...editing, 
+      name, 
+      dosage, 
+      times, 
+      reminder,
+      start_date: startDate,
+      end_date: endDate,
+      frequency,
+      days_of_week: daysOfWeek,
+      notes,
+      color
+    } : { 
+      id: uid(), 
+      name, 
+      dosage, 
+      times, 
+      reminder,
+      start_date: startDate,
+      end_date: endDate,
+      frequency,
+      days_of_week: daysOfWeek,
+      notes,
+      color
+    };
     if (editing) {
       setMeds((s) => s.map((x) => (x.id === med.id ? med : x)));
       if (token) {
@@ -220,17 +267,6 @@ export default function Medication() {
     }
   }
 
-  function addTime(date: Date) {
-    // store only time part in ISO by using today with hh:mm:ss
-    const iso = date.toISOString();
-    if (pickerIndex === null) {
-      setTimes((t) => [...t, iso]);
-    } else {
-      setTimes((t) => t.map((x, i) => (i === pickerIndex ? iso : x)));
-      setPickerIndex(null);
-    }
-    setShowTimePicker(false);
-  }
 
   function removeTime(idx: number) {
     setTimes((t) => t.filter((_, i) => i !== idx));
@@ -254,44 +290,6 @@ export default function Medication() {
     }
   }
 
-  function renderMed({ item }: { item: MedicationItem }) {
-    return (
-      <View style={styles.medCard}>
-        <View style={styles.medAvatar}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitial}>{(item.name || '?').charAt(0).toUpperCase()}</Text>
-          </View>
-        </View>
-
-        <View style={styles.medContent}>
-          <Text style={styles.medName}>{item.name}</Text>
-          <Text style={styles.medMeta}>{item.dosage} • {item.times.length} times</Text>
-          <View style={styles.timeRow}>
-            {item.times.map((t, i) => (
-              <View key={i} style={styles.timeBadge}>
-                <Text style={styles.timeText}>{new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text>
-              </View>
-            ))}
-          </View>
-        </View>
-
-        <View style={styles.medActionsColumn}>
-          <TouchableOpacity onPress={() => markTaken(item.id)} style={[styles.actionBtn, styles.actionBtnGreen]} activeOpacity={0.85}>
-            <Ionicons name="checkmark" size={18} color="white" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => snooze(item.id)} style={[styles.actionBtn, styles.actionBtnOrange]} activeOpacity={0.85}>
-            <Ionicons name="time" size={18} color="white" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => openEdit(item)} style={[styles.actionBtn, styles.actionBtnBlue]} activeOpacity={0.85}>
-            <Ionicons name="create" size={18} color="white" />
-          </TouchableOpacity>
-          <TouchableOpacity onPress={() => deleteMedication(item.id)} style={[styles.actionBtn, styles.actionBtnRed]} activeOpacity={0.85}>
-            <Ionicons name="trash" size={18} color="white" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  }
 
   function clearHistory() {
     Alert.alert('Clear history', 'Remove all medication history?', [
@@ -300,86 +298,225 @@ export default function Medication() {
     ]);
   }
 
-  // ...existing code...
+  // Helper functions for new features
+  function toggleDayOfWeek(day: number) {
+    setDaysOfWeek(prev => 
+      prev.includes(day) 
+        ? prev.filter(d => d !== day)
+        : [...prev, day]
+    );
+  }
+
+  function getDayName(day: number) {
+    const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    return days[day];
+  }
+
+  function getMedicationColor(med: MedicationItem) {
+    return med.color || '#1E3A8A';
+  }
+
+  function formatTimeUntilNext(nextTime: string) {
+    const now = new Date();
+    const next = new Date(nextTime);
+    const diffMs = next.getTime() - now.getTime();
+    
+    if (diffMs < 0) return 'Overdue';
+    
+    const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+    const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (diffHours > 0) {
+      return `${diffHours}h ${diffMinutes}m`;
+    } else {
+      return `${diffMinutes}m`;
+    }
+  }
+
+  if (loading) {
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header: let child touchables receive events; do not block touches at the header level. */}
-      <View
-        style={styles.headerRow}
-        pointerEvents="box-none"
-        onLayout={() => console.log('Header: onLayout')}
-      >
-        <View>
-          <Text style={styles.headerTitle}>Medication</Text>
-          <Text style={styles.headerSubtitle}>Manage medications, schedules and reminders</Text>
+        <View style={styles.loadingContainer}>
+          <Text style={styles.loadingText}>Loading medications...</Text>
         </View>
-        {/* Header no longer contains the Add button; FAB is rendered at the bottom-right */}
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      <ScrollView 
+        style={styles.scrollView} 
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Header */}
+        <View style={styles.headerSection}>
+          <Text style={styles.headerTitle}>Medications</Text>
+          <Text style={styles.headerSubtitle}>Manage your medication schedule</Text>
       </View>
 
-      {/* Make FlatList the main scrollable to avoid nesting VirtualizedList inside ScrollView */}
-      <FlatList
-        data={meds}
-        keyExtractor={(i) => i.id}
-        renderItem={renderMed}
-        contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 120 }}
-        ListHeaderComponent={() => (
-          <View style={{ paddingHorizontal: 20 }}>
-            <Text style={styles.headerTitle}>Medication</Text>
-            <Text style={styles.headerSubtitle}>Manage medications, schedules and reminders</Text>
-            <View style={styles.divider} />
+        {/* Stats Dashboard */}
+        {stats && (
+          <View style={styles.statsContainer}>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.total_medications}</Text>
+              <Text style={styles.statLabel}>Total</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.active_medications}</Text>
+              <Text style={styles.statLabel}>Active</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.completed_today}</Text>
+              <Text style={styles.statLabel}>Today</Text>
+            </View>
+            <View style={styles.statCard}>
+              <Text style={styles.statNumber}>{stats.missed_today}</Text>
+              <Text style={styles.statLabel}>Missed</Text>
+            </View>
           </View>
         )}
-        ListEmptyComponent={() => (
+
+        {/* Upcoming Medications */}
+        {upcoming.length > 0 && (
+          <View style={styles.sectionContainer}>
+            <Text style={styles.sectionTitle}>Upcoming</Text>
+            {upcoming.slice(0, 3).map((item, index) => (
+              <View key={index} style={styles.upcomingCard}>
+                <View style={[styles.upcomingIcon, { backgroundColor: getMedicationColor(item.medication) }]}>
+                  <Text style={styles.upcomingInitial}>{item.medication.name.charAt(0).toUpperCase()}</Text>
+                </View>
+                <View style={styles.upcomingContent}>
+                  <Text style={styles.upcomingName}>{item.medication.name}</Text>
+                  <Text style={styles.upcomingTime}>
+                    {new Date(item.next_reminder).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </Text>
+                </View>
+                <View style={styles.upcomingRight}>
+                  <Text style={styles.upcomingCountdown}>
+                    {formatTimeUntilNext(item.next_reminder)}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        )}
+
+        {/* Medications List */}
+        <View style={styles.sectionContainer}>
+          <Text style={styles.sectionTitle}>Your Medications</Text>
+          {meds.length === 0 ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No medications yet. Tap Add to create one.</Text>
+              <Ionicons name="medical" size={48} color="#9CA3AF" />
+              <Text style={styles.emptyText}>No medications yet</Text>
+              <Text style={styles.emptySubtext}>Tap the + button to add your first medication</Text>
           </View>
-        )}
-        ListFooterComponent={() => (
-          <View style={{ paddingHorizontal: 20 }}>
+          ) : (
+            meds.map((med) => (
+              <View key={med.id} style={styles.medicationCard}>
+                <View style={[styles.medicationIcon, { backgroundColor: getMedicationColor(med) }]}>
+                  <Text style={styles.medicationInitial}>{med.name.charAt(0).toUpperCase()}</Text>
+                </View>
+                
+                <View style={styles.medicationContent}>
+                  <Text style={styles.medicationName}>{med.name}</Text>
+                  <Text style={styles.medicationDosage}>{med.dosage}</Text>
+                  
+                  <View style={styles.medicationTimes}>
+                    {med.times.map((time, index) => (
+                      <View key={index} style={styles.timeBadge}>
+                         <Text style={styles.timeText}>
+                           {new Date(time).toLocaleTimeString([], { hour: 'numeric', hour12: true })}
+                         </Text>
+                      </View>
+                    ))}
+                  </View>
+                  
+                  {med.notes && (
+                    <Text style={styles.medicationNotes}>{med.notes}</Text>
+                  )}
+                </View>
+
+                <View style={styles.medicationActions}>
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.takenButton]} 
+                    onPress={() => markTaken(med.id)}
+                  >
+                    <Ionicons name="checkmark" size={16} color="white" />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.snoozeButton]} 
+                    onPress={() => snooze(med.id)}
+                  >
+                    <Ionicons name="time" size={16} color="white" />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.editButton]} 
+                    onPress={() => openEdit(med)}
+                  >
+                    <Ionicons name="create" size={16} color="white" />
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={[styles.actionButton, styles.deleteButton]} 
+                    onPress={() => deleteMedication(med.id)}
+                  >
+                    <Ionicons name="trash" size={16} color="white" />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          )}
+        </View>
+
+        {/* Recent History */}
+        {history.length > 0 && (
+          <View style={styles.historySection}>
             <View style={styles.historyHeader}>
-              <Text style={styles.sectionTitle}>History</Text>
+              <Text style={styles.sectionTitle}>Recent History</Text>
               <TouchableOpacity onPress={clearHistory}>
                 <Text style={styles.clearText}>Clear</Text>
               </TouchableOpacity>
             </View>
-            <View style={styles.divider} />
-
-            {history.length === 0 ? (
-              <Text style={styles.emptyText}>No history yet.</Text>
-            ) : (
-              history.slice(0, 30).map((h) => (
-                <View key={h.id} style={styles.historyItemRow}>
+            
+            <View style={styles.historyList}>
+              {history.slice(0, 5).map((h) => (
+                <View key={h.id} style={styles.historyItem}>
                   <View style={styles.historyLeft}>
-                    <Text style={styles.historyMed}>{meds.find(m => m.id === h.medId)?.name || 'Unknown'}</Text>
-                    <Text style={styles.historyTime}>{new Date(h.time).toLocaleString()}</Text>
+                    <Text style={styles.historyMed}>
+                      {meds.find(m => m.id === h.medId)?.name || 'Unknown'}
+                    </Text>
+                    <Text style={styles.historyTime}>
+                      {new Date(h.time).toLocaleDateString()} at {new Date(h.time).toLocaleTimeString([], { hour: 'numeric', hour12: true })}
+                    </Text>
                   </View>
                   <View style={styles.historyRight}>
-                    <View style={[styles.statusBadge, h.status === 'completed' ? { backgroundColor: '#D1FAE5' } : h.status === 'snoozed' ? { backgroundColor: '#FEF3C7' } : { backgroundColor: '#F3F4F6' }]}>
-                      <Text style={styles.historyStatus}>{h.status}</Text>
+                    <View style={[
+                      styles.statusBadge, 
+                      h.status === 'completed' ? styles.statusCompleted : 
+                      h.status === 'snoozed' ? styles.statusSnoozed : 
+                      styles.statusSkipped
+                    ]}>
+                      <Text style={styles.statusText}>{h.status}</Text>
                     </View>
                   </View>
                 </View>
-              ))
-            )}
+              ))}
+            </View>
           </View>
         )}
-      />
+      </ScrollView>
 
       <BottomNavigation currentRoute="medication" />
 
-      {/* Floating Action Button (FAB) for Add - positioned above bottom navigation */}
+      {/* Floating Action Button */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => {
-          try {
-            openAdd();
-          } catch (err) {
-            console.log('FAB: openAdd threw', err);
-          }
-        }}
+        onPress={openAdd}
         accessibilityLabel="Add medication"
-        hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        accessibilityRole="button"
         activeOpacity={0.8}
       >
         <Ionicons name="add" size={24} color="white" />
@@ -408,28 +545,9 @@ export default function Medication() {
               <Text style={styles.label}>Times</Text>
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                 <TouchableOpacity onPress={()=>{ 
-                  // On Android we'll use the native dialog and add immediately on selection
                   setPickerIndex(null);
                   setTempTime(new Date());
-                  if (Platform.OS === 'android') {
-                    // Open our JS fallback modal (avoids native picker issues)
-                    const now = new Date();
-                    let h = now.getHours();
-                    const m = now.getMinutes();
-                    const am = h < 12;
-                    if (h === 0) h = 12; else if (h > 12) h = h - 12;
-                    setTempHour(h);
-                    setTempMinute(m);
-                    setTempAm(am);
-                    setTempTime(now);
                     setTimeModalVisible(true);
-                    setShowTimePicker(false);
-                  } else {
-                    // iOS: show our friendly confirmation modal with embedded spinner
-                    setTempTime(new Date());
-                    setTimeModalVisible(true);
-                    setShowTimePicker(true);
-                  }
                 }}>
                   <Text style={styles.addTimeText}>Add time</Text>
                 </TouchableOpacity>
@@ -448,9 +566,13 @@ export default function Medication() {
             <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
               {times.map((t, idx) => (
                 <View key={idx} style={styles.timeRowModal}>
-                  <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
+                  <Text style={styles.timeTextModal}>{new Date(t).toLocaleTimeString([], { hour: 'numeric', hour12: true })}</Text>
                   <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity onPress={() => { setPickerIndex(idx); const d = new Date(t); if (Platform.OS === 'android') { let h = d.getHours(); const m = d.getMinutes(); const am = h < 12; if (h === 0) h = 12; else if (h > 12) h = h - 12; setTempHour(h); setTempMinute(m); setTempAm(am); setTempTime(d); setTimeModalVisible(true); setShowTimePicker(false); } else { setTempTime(d); setTimeModalVisible(true); setShowTimePicker(true); } }} style={styles.smallBtn}>
+                     <TouchableOpacity onPress={() => { 
+                       setPickerIndex(idx); 
+                       setTempTime(new Date(t)); 
+                       setTimeModalVisible(true); 
+                     }} style={styles.smallBtn}>
                       <Ionicons name="create" size={16} color="#1E3A8A" />
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => removeTime(idx)} style={styles.smallBtn}>
@@ -468,6 +590,116 @@ export default function Medication() {
               </TouchableOpacity>
             </View>
 
+            {/* Advanced Scheduling */}
+            <Text style={styles.label}>Schedule</Text>
+            
+            <View style={styles.scheduleRow}>
+               <TouchableOpacity 
+                 style={styles.dateButton}
+                 onPress={() => {
+                   console.log('Start date button pressed');
+                   setDatePickerType('start');
+                   setShowDatePicker(true);
+                   console.log('showDatePicker set to true, datePickerType set to start');
+                 }}
+                 activeOpacity={0.7}
+               >
+                 <Ionicons name="calendar" size={16} color="#1E3A8A" />
+                 <Text style={styles.dateButtonText}>Start: {startDate}</Text>
+                 <Ionicons name="chevron-down" size={16} color="#6B7280" style={{ marginLeft: 'auto' }} />
+               </TouchableOpacity>
+               
+               <TouchableOpacity 
+                 style={styles.dateButton}
+                 onPress={() => {
+                   console.log('End date button pressed');
+                   setDatePickerType('end');
+                   setShowDatePicker(true);
+                   console.log('showDatePicker set to true, datePickerType set to end');
+                 }}
+                 activeOpacity={0.7}
+               >
+                 <Ionicons name="calendar" size={16} color="#1E3A8A" />
+                 <Text style={styles.dateButtonText}>End: {endDate || 'Tap to set'}</Text>
+                 <Ionicons name="chevron-down" size={16} color="#6B7280" style={{ marginLeft: 'auto' }} />
+               </TouchableOpacity>
+            </View>
+
+            <Text style={styles.label}>Frequency</Text>
+            <View style={styles.frequencyContainer}>
+              {['daily', 'weekly', 'monthly', 'custom'].map((freq) => (
+                <TouchableOpacity
+                  key={freq}
+                  style={[
+                    styles.frequencyButton,
+                    frequency === freq && styles.frequencyButtonActive
+                  ]}
+                  onPress={() => setFrequency(freq as any)}
+                >
+                  <Text style={[
+                    styles.frequencyButtonText,
+                    frequency === freq && styles.frequencyButtonTextActive
+                  ]}>
+                    {freq.charAt(0).toUpperCase() + freq.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            {frequency === 'weekly' && (
+              <View style={styles.daysContainer}>
+                <Text style={styles.label}>Days of Week</Text>
+                <View style={styles.daysRow}>
+                  {[0, 1, 2, 3, 4, 5, 6].map((day) => (
+                    <TouchableOpacity
+                      key={day}
+                      style={[
+                        styles.dayButton,
+                        daysOfWeek.includes(day) && styles.dayButtonActive
+                      ]}
+                      onPress={() => toggleDayOfWeek(day)}
+                    >
+                      <Text style={[
+                        styles.dayButtonText,
+                        daysOfWeek.includes(day) && styles.dayButtonTextActive
+                      ]}>
+                        {getDayName(day)}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+            )}
+
+            <Text style={styles.label}>Notes</Text>
+            <TextInput 
+              value={notes} 
+              onChangeText={setNotes} 
+              style={[styles.input, styles.notesInput]} 
+              placeholder="Add notes about this medication..."
+              multiline
+              numberOfLines={3}
+            />
+
+            <Text style={styles.label}>Color</Text>
+            <View style={styles.colorContainer}>
+              {['#1E3A8A', '#DC2626', '#059669', '#D97706', '#7C3AED', '#DB2777'].map((colorOption) => (
+                <TouchableOpacity
+                  key={colorOption}
+                  style={[
+                    styles.colorButton,
+                    { backgroundColor: colorOption },
+                    color === colorOption && styles.colorButtonActive
+                  ]}
+                  onPress={() => setColor(colorOption)}
+                >
+                  {color === colorOption && (
+                    <Ionicons name="checkmark" size={16} color="white" />
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <TouchableOpacity onPress={saveMedication} style={styles.saveBtn}>
               <Text style={styles.saveText}>Save</Text>
             </TouchableOpacity>
@@ -475,73 +707,99 @@ export default function Medication() {
               </TouchableWithoutFeedback>
             </KeyboardAvoidingView>
 
-          {/* Time picker confirmation modal - friendly wrapper around top-level native picker */}
-          <Modal visible={timeModalVisible} transparent animationType="fade" onRequestClose={() => { setTimeModalVisible(false); setShowTimePicker(false); setPickerIndex(null); }}>
+           {/* Time picker modal */}
+           <Modal visible={timeModalVisible} transparent animationType="fade" onRequestClose={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
             <View style={styles.timeModalWrapper}>
-              <TouchableWithoutFeedback onPress={() => { setTimeModalVisible(false); setShowTimePicker(false); setPickerIndex(null); }}>
+               <TouchableWithoutFeedback onPress={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
                 <View style={styles.timeModalBackdrop} />
               </TouchableWithoutFeedback>
               <Animated.View style={[styles.timeModalContent, { opacity: MODAL_ANIM, transform: [{ translateY: MODAL_ANIM.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] }]}>
                 <Text style={styles.timeModalTitle}>Select time</Text>
-                <Text style={styles.timeModalPreview}>{tempTime ? tempTime.toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', hour12: true }) : new Date().toLocaleTimeString('en-PH', { hour: 'numeric', minute: '2-digit', hour12: true })}</Text>
-                    <Text style={styles.pickerLabel}>Pick a time</Text>
-                    <View style={styles.wheelWrap}>
-                      <View style={styles.wheelColumn}>
-                        <ScrollView ref={hourRef} showsVerticalScrollIndicator={false} snapToInterval={ITEM_HEIGHT} decelerationRate="fast" onMomentumScrollEnd={(e) => {
-                          const idx = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-                          const val = hours[Math.max(0, Math.min(hours.length - 1, idx))];
-                          setTempHour(val);
-                        }}>
-                          {hours.map((h) => (
-                            <View key={`h-${h}`} style={[styles.wheelItem, tempHour === h && styles.wheelItemSelected]}>
-                              <Text style={[styles.wheelItemText, tempHour === h && styles.wheelItemTextSelected]}>{h}</Text>
-                            </View>
-                          ))}
+                 <View style={styles.timePickerContainer}>
+                   {/* Hour Picker (1-12) */}
+                   <View style={styles.timePickerColumn}>
+                     <Text style={styles.timePickerLabel}>Hour</Text>
+                     <ScrollView style={styles.timePickerScroll} showsVerticalScrollIndicator={false}>
+                       {Array.from({ length: 12 }, (_, i) => {
+                         const hour = i + 1; // 1-12
+                         const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
+                         const currentHour12 = currentHour24 === 0 ? 12 : (currentHour24 > 12 ? currentHour24 - 12 : currentHour24);
+                         return (
+                           <TouchableOpacity
+                             key={hour}
+                             style={[styles.timePickerOption, currentHour12 === hour && styles.timePickerOptionSelected]}
+                             onPress={() => {
+                               const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
+                               const isAM = currentHour24 < 12;
+                               let newHour24;
+                               if (hour === 12) {
+                                 newHour24 = isAM ? 0 : 12; // 12 AM = 0, 12 PM = 12
+                               } else {
+                                 newHour24 = isAM ? hour : hour + 12; // AM = same, PM = +12
+                               }
+                               const now = new Date();
+                               const newTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), newHour24, 0);
+                               setTempTime(newTime);
+                             }}
+                           >
+                             <Text style={[styles.timePickerOptionText, currentHour12 === hour && styles.timePickerOptionTextSelected]}>
+                               {hour}
+                             </Text>
+                           </TouchableOpacity>
+                         );
+                       })}
                         </ScrollView>
                       </View>
-                      <View style={styles.wheelColumnSeparator}><Text style={{ fontSize: 20 }}>:</Text></View>
-                      <View style={styles.wheelColumn}>
-                        <ScrollView ref={minuteRef} showsVerticalScrollIndicator={false} snapToInterval={ITEM_HEIGHT} decelerationRate="fast" onMomentumScrollEnd={(e) => {
-                          const idx = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-                          const val = minutes[Math.max(0, Math.min(minutes.length - 1, idx))];
-                          setTempMinute(val);
-                        }}>
-                          {minutes.map((m) => (
-                            <View key={`m-${m}`} style={[styles.wheelItem, tempMinute === m && styles.wheelItemSelected]}>
-                              <Text style={[styles.wheelItemText, tempMinute === m && styles.wheelItemTextSelected]}>{m.toString().padStart(2, '0')}</Text>
-                            </View>
-                          ))}
-                        </ScrollView>
-                      </View>
-                      <View style={styles.wheelColumn}>
-                        <ScrollView ref={amRef} showsVerticalScrollIndicator={false} snapToInterval={ITEM_HEIGHT} decelerationRate="fast" onMomentumScrollEnd={(e) => {
-                          const idx = Math.round(e.nativeEvent.contentOffset.y / ITEM_HEIGHT);
-                          setTempAm(idx % 2 === 0);
-                        }}>
-                          {[ 'AM', 'PM' ].map((p, i) => (
-                            <View key={`a-${p}`} style={[styles.wheelItem, (tempAm ? 'AM' : 'PM') === p && styles.wheelItemSelected]}>
-                              <Text style={[styles.wheelItemText, (tempAm ? 'AM' : 'PM') === p && styles.wheelItemTextSelected]}>{p}</Text>
-                            </View>
-                          ))}
-                        </ScrollView>
-                      </View>
-                    </View>
 
-                    <Text style={styles.previewText}>You’ll be reminded at {`${tempHour}:${tempMinute.toString().padStart(2,'0')} ${tempAm ? 'AM' : 'PM'}`}</Text>
-                    <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 12 }}>
-                      <TouchableOpacity style={[styles.secondaryBtn, { marginRight: 8 }]} onPress={() => { setTimeModalVisible(false); setPickerIndex(null); setTempTime(null); }}>
+                   {/* AM/PM Picker */}
+                   <View style={styles.timePickerColumn}>
+                     <Text style={styles.timePickerLabel}>Period</Text>
+                     <ScrollView style={styles.timePickerScroll} showsVerticalScrollIndicator={false}>
+                       {['AM', 'PM'].map((period) => {
+                         const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
+                         const isAM = currentHour24 < 12;
+                         const isSelected = (period === 'AM' && isAM) || (period === 'PM' && !isAM);
+                         return (
+                           <TouchableOpacity
+                             key={period}
+                             style={[styles.timePickerOption, isSelected && styles.timePickerOptionSelected]}
+                             onPress={() => {
+                               const currentHour24 = tempTime ? tempTime.getHours() : new Date().getHours();
+                               const currentHour12 = currentHour24 === 0 ? 12 : (currentHour24 > 12 ? currentHour24 - 12 : currentHour24);
+                               let newHour24;
+                               if (currentHour12 === 12) {
+                                 newHour24 = period === 'AM' ? 0 : 12; // 12 AM = 0, 12 PM = 12
+                               } else {
+                                 newHour24 = period === 'AM' ? currentHour12 : currentHour12 + 12; // AM = same, PM = +12
+                               }
+                               const now = new Date();
+                               const newTime = new Date(now.getFullYear(), now.getMonth(), now.getDate(), newHour24, 0);
+                               setTempTime(newTime);
+                             }}
+                           >
+                             <Text style={[styles.timePickerOptionText, isSelected && styles.timePickerOptionTextSelected]}>
+                               {period}
+                             </Text>
+                           </TouchableOpacity>
+                         );
+                       })}
+                        </ScrollView>
+                      </View>
+                            </View>
+                 <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 16 }}>
+                   <TouchableOpacity style={[styles.secondaryBtn, { marginRight: 8 }]} onPress={() => { setTimeModalVisible(false); setPickerIndex(null); }}>
                         <Text style={styles.secondaryBtnText}>Cancel</Text>
                       </TouchableOpacity>
                       <TouchableOpacity style={styles.primarySmallBtn} onPress={() => {
-                        // commit chosen time
-                        const now = new Date();
-                        let h = tempHour % 12;
-                        if (!tempAm) h += 12;
-                        const chosen = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, tempMinute, 0, 0);
-                        if (pickerIndex === null) setTimes((t) => [...t, chosen.toISOString()]); else setTimes((t) => t.map((x,i)=> i===pickerIndex ? chosen.toISOString() : x));
-                        setTimeModalVisible(false);
+                     if (tempTime) {
+                       if (pickerIndex === null) {
+                         setTimes((t) => [...t, tempTime.toISOString()]);
+                       } else {
+                         setTimes((t) => t.map((x,i)=> i===pickerIndex ? tempTime.toISOString() : x));
                         setPickerIndex(null);
-                        setTempTime(null);
+                       }
+                     }
+                     setTimeModalVisible(false);
                       }}>
                         <Text style={styles.primarySmallBtnText}>Add</Text>
                       </TouchableOpacity>
@@ -554,122 +812,644 @@ export default function Medication() {
         </SafeAreaView>
       </Modal>
 
-      {/* Render DateTimePicker at top-level (not inside Modal) to avoid Android Modal/Picker conflicts */}
-      {showTimePicker && (
-        <DateTimePicker
-          value={tempTime || (pickerIndex !== null && times[pickerIndex] ? new Date(times[pickerIndex]) : new Date())}
-          mode="time"
-          display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(e: any, d?: Date) => {
-            const action = e?.type || e?.action || (e && e.nativeEvent && e.nativeEvent.action);
-            const dismissed = action === 'dismissed' || action === 'dismissedAction' || action === 1;
-            try {
-              if (d && !dismissed) {
-                if (Platform.OS === 'android') {
-                  // Android: add immediately to avoid modal + native dialog overlap
-                  addTime(d);
+      {/* Date Picker Modal */}
+      <Modal visible={showDatePicker} transparent animationType="fade" onRequestClose={() => { setShowDatePicker(false); setDatePickerType(null); }}>
+        <View style={styles.dateModalWrapper}>
+          <TouchableWithoutFeedback onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}>
+            <View style={styles.dateModalBackdrop} />
+          </TouchableWithoutFeedback>
+          <View style={styles.dateModalContent}>
+            <Text style={styles.dateModalTitle}>
+              Select {datePickerType === 'start' ? 'Start' : 'End'} Date
+            </Text>
+            <View style={styles.datePickerContainer}>
+              {/* Year Picker */}
+              <View style={styles.pickerColumn}>
+                <Text style={styles.pickerLabel}>Year</Text>
+                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 10 }, (_, i) => {
+                    const year = new Date().getFullYear() + i;
+                    const currentYear = datePickerType === 'start' 
+                      ? parseInt(startDate.split('-')[0]) 
+                      : parseInt(endDate.split('-')[0]) || new Date().getFullYear();
+                    return (
+                      <TouchableOpacity
+                        key={year}
+                        style={[styles.pickerOption, currentYear === year && styles.pickerOptionSelected]}
+                        onPress={() => {
+                          const currentDate = datePickerType === 'start' ? startDate : endDate;
+                          const [, month, day] = currentDate.split('-');
+                          const newDate = `${year}-${month || '01'}-${day || '01'}`;
+                          if (datePickerType === 'start') {
+                            setStartDate(newDate);
                 } else {
-                  // iOS: update preview and keep modal open for confirmation
-                  setTempTime(d);
-                }
-              }
-            } catch {
-              // on error just hide native picker
-            } finally {
-              // ensure native picker is hidden after handling
-              setTimeout(() => setShowTimePicker(false), 0);
-            }
-          }}
-        />
-      )}
+                            setEndDate(newDate);
+                          }
+                        }}
+                      >
+                        <Text style={[styles.pickerOptionText, currentYear === year && styles.pickerOptionTextSelected]}>
+                          {year}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Month Picker */}
+              <View style={styles.pickerColumn}>
+                <Text style={styles.pickerLabel}>Month</Text>
+                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 12 }, (_, i) => {
+                    const month = i + 1;
+                    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                    const currentMonth = datePickerType === 'start' 
+                      ? parseInt(startDate.split('-')[1]) 
+                      : parseInt(endDate.split('-')[1]) || 1;
+                    return (
+                      <TouchableOpacity
+                        key={month}
+                        style={[styles.pickerOption, currentMonth === month && styles.pickerOptionSelected]}
+                        onPress={() => {
+                          const currentDate = datePickerType === 'start' ? startDate : endDate;
+                          const [year, , day] = currentDate.split('-');
+                          const newDate = `${year || new Date().getFullYear()}-${month.toString().padStart(2, '0')}-${day || '01'}`;
+                          if (datePickerType === 'start') {
+                            setStartDate(newDate);
+                          } else {
+                            setEndDate(newDate);
+                          }
+                        }}
+                      >
+                        <Text style={[styles.pickerOptionText, currentMonth === month && styles.pickerOptionTextSelected]}>
+                          {monthNames[i]}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+
+              {/* Day Picker */}
+              <View style={styles.pickerColumn}>
+                <Text style={styles.pickerLabel}>Day</Text>
+                <ScrollView style={styles.pickerScroll} showsVerticalScrollIndicator={false}>
+                  {Array.from({ length: 31 }, (_, i) => {
+                    const day = i + 1;
+                    const currentDay = datePickerType === 'start' 
+                      ? parseInt(startDate.split('-')[2]) 
+                      : parseInt(endDate.split('-')[2]) || 1;
+                    return (
+                      <TouchableOpacity
+                        key={day}
+                        style={[styles.pickerOption, currentDay === day && styles.pickerOptionSelected]}
+                        onPress={() => {
+                          const currentDate = datePickerType === 'start' ? startDate : endDate;
+                          const [year, month] = currentDate.split('-');
+                          const newDate = `${year || new Date().getFullYear()}-${month || '01'}-${day.toString().padStart(2, '0')}`;
+                          if (datePickerType === 'start') {
+                            setStartDate(newDate);
+                          } else {
+                            setEndDate(newDate);
+                          }
+                        }}
+                      >
+                        <Text style={[styles.pickerOptionText, currentDay === day && styles.pickerOptionTextSelected]}>
+                          {day}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            </View>
+            <View style={styles.dateModalButtons}>
+              <TouchableOpacity 
+                style={styles.dateModalCancelButton} 
+                onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}
+              >
+                <Text style={styles.dateModalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.dateModalDoneButton} 
+                onPress={() => { setShowDatePicker(false); setDatePickerType(null); }}
+              >
+                <Text style={styles.dateModalDoneText}>Done</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8F9FA' },
-  scrollView: { flex: 1, paddingHorizontal: 20 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 20, paddingBottom: 16 },
-  headerTitle: { fontSize: 22, fontWeight: '700', color: '#1F2937' },
-  headerSubtitle: { fontSize: 13, color: '#6B7280', marginTop: 6 },
-  addButton: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1E3A8A', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12 },
-  addText: { color: 'white', marginLeft: 8, fontWeight: '600' },
-  addButtonFloat: { zIndex: 1000, elevation: 10 },
-  fab: { position: 'absolute', right: 20, bottom: 80, width: 60, height: 60, borderRadius: 30, backgroundColor: '#1E3A8A', alignItems: 'center', justifyContent: 'center', zIndex: 2000, elevation: 14, shadowColor: '#000', shadowOffset: { width:0, height:8 }, shadowOpacity: 0.16, shadowRadius: 16 },
-  emptyState: { padding: 24, alignItems: 'center' },
-  emptyText: { color: '#6B7280' },
-  medCard: { flexDirection: 'row', backgroundColor: 'white', borderRadius: 14, padding: 18, marginBottom: 14, alignItems: 'center', shadowColor: '#000', shadowOffset: { width:0, height:6 }, shadowOpacity: 0.06, shadowRadius: 12, elevation: 4 },
-  medAvatar: { width: 56, alignItems: 'center', marginRight: 12 },
-  avatarCircle: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1E3A8A', alignItems: 'center', justifyContent: 'center' },
-  medName: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
-  medMeta: { fontSize: 12, color: '#6B7280', marginTop: 4 },
-  timeRow: { flexDirection: 'row', marginTop: 10, flexWrap: 'wrap' },
-  timeBadge: { backgroundColor: '#EFF6FF', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 10, marginRight: 8, marginBottom: 8 },
-  timeText: { color: '#1E3A8A', fontWeight: '700' },
-  medActions: { marginLeft: 12, alignItems: 'center', justifyContent: 'center' },
-  medContent: { flex: 1 },
-  medActionsColumn: { width: 56, alignItems: 'center', justifyContent: 'center' },
-  actionCircle: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'white', alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOffset: { width:0, height:2 }, shadowOpacity: 0.04, shadowRadius: 6, elevation: 1, marginBottom: 8 },
-  iconBtn: { padding: 6, backgroundColor: 'rgba(0,0,0,0.03)', borderRadius: 10, marginBottom: 6 },
-  historyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16, marginBottom: 8 },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  loadingText: { fontSize: 16, color: '#6B7280' },
+  scrollView: { flex: 1 },
+  scrollContent: { paddingBottom: 100 }, // Extra padding for FAB and bottom navigation
+  
+  // Header
+  headerSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
+  headerTitle: { fontSize: 28, fontWeight: '700', color: '#1F2937' },
+  headerSubtitle: { fontSize: 16, color: '#6B7280', marginTop: 4 },
+  
+  // Stats Dashboard
+  statsContainer: { 
+    flexDirection: 'row', 
+    paddingHorizontal: 20, 
+    marginBottom: 24,
+    justifyContent: 'space-between'
+  },
+  statCard: { 
+    backgroundColor: 'white', 
+    borderRadius: 16, 
+    padding: 16, 
+    alignItems: 'center',
+    flex: 1,
+    marginHorizontal: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  statNumber: { fontSize: 24, fontWeight: '700', color: '#1F2937' },
+  statLabel: { fontSize: 12, color: '#6B7280', marginTop: 4 },
+  
+  // Sections
+  sectionContainer: { paddingHorizontal: 20, marginBottom: 24 },
+  sectionTitle: { fontSize: 20, fontWeight: '700', color: '#1F2937', marginBottom: 16 },
+  
+  // Upcoming Medications
+  upcomingCard: { 
+    backgroundColor: 'white', 
+    borderRadius: 16, 
+    padding: 16, 
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  upcomingIcon: { 
+    width: 48, 
+    height: 48, 
+    borderRadius: 24, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginRight: 12
+  },
+  upcomingInitial: { color: 'white', fontWeight: '700', fontSize: 18 },
+  upcomingContent: { flex: 1 },
+  upcomingName: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
+  upcomingTime: { fontSize: 14, color: '#6B7280', marginTop: 2 },
+  upcomingRight: { alignItems: 'flex-end' },
+  upcomingCountdown: { fontSize: 14, fontWeight: '600', color: '#1E3A8A' },
+  
+  // Medication Cards
+  medicationCard: { 
+    backgroundColor: 'white', 
+    borderRadius: 16, 
+    padding: 16, 
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  medicationIcon: { 
+    width: 56, 
+    height: 56, 
+    borderRadius: 28, 
+    alignItems: 'center', 
+    justifyContent: 'center',
+    marginRight: 16
+  },
+  medicationInitial: { color: 'white', fontWeight: '700', fontSize: 20 },
+  medicationContent: { flex: 1 },
+  medicationName: { fontSize: 18, fontWeight: '600', color: '#1F2937' },
+  medicationDosage: { fontSize: 14, color: '#6B7280', marginTop: 2 },
+  medicationTimes: { flexDirection: 'row', flexWrap: 'wrap', marginTop: 8 },
+  medicationNotes: { fontSize: 12, color: '#6B7280', marginTop: 4, fontStyle: 'italic' },
+  
+  // Time Badges
+  timeBadge: { 
+    backgroundColor: '#EFF6FF', 
+    paddingHorizontal: 8, 
+    paddingVertical: 4, 
+    borderRadius: 8, 
+    marginRight: 6, 
+    marginBottom: 4 
+  },
+  timeText: { color: '#1E3A8A', fontWeight: '600', fontSize: 12 },
+  
+  // Action Buttons
+  medicationActions: { alignItems: 'center' },
+  actionButton: { 
+    width: 36, 
+    height: 36, 
+    borderRadius: 18, 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 2
+  },
+  takenButton: { backgroundColor: '#22C55E' },
+  snoozeButton: { backgroundColor: '#F59E0B' },
+  editButton: { backgroundColor: '#2563EB' },
+  deleteButton: { backgroundColor: '#EF4444' },
+  
+  // Empty State
+  emptyState: { 
+    alignItems: 'center', 
+    paddingVertical: 48,
+    backgroundColor: 'white',
+    borderRadius: 16,
+    marginTop: 8
+  },
+  emptyText: { fontSize: 16, color: '#6B7280', marginTop: 12 },
+  emptySubtext: { fontSize: 14, color: '#9CA3AF', marginTop: 4 },
+  
+  // History
+  historySection: { 
+    paddingHorizontal: 20, 
+    marginBottom: 24,
+    marginTop: 8
+  },
+  historyHeader: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    alignItems: 'center', 
+    marginBottom: 16 
+  },
+  historyList: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
   clearText: { color: '#EF4444', fontWeight: '600' },
-  historyItem: { backgroundColor: 'white', borderRadius: 8, padding: 12, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between' },
-  historyMed: { fontWeight: '600', color: '#1F2937' },
-  historyTime: { color: '#6B7280' },
-  historyStatus: { color: '#6B7280', fontStyle: 'italic' },
-  divider: { height: 1, backgroundColor: '#F3F4F6', marginVertical: 12, borderRadius: 2 },
-  historyItemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10 },
+  historyItem: { 
+    backgroundColor: '#F9FAFB', 
+    borderRadius: 12, 
+    padding: 16, 
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderLeftWidth: 4,
+    borderLeftColor: '#1E3A8A'
+  },
   historyLeft: { flex: 1 },
-  historyRight: { width: 90, alignItems: 'flex-end' },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12 },
+  historyMed: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
+  historyTime: { fontSize: 14, color: '#6B7280', marginTop: 4 },
+  historyRight: { alignItems: 'flex-end' },
+  statusBadge: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12 },
+  statusCompleted: { backgroundColor: '#D1FAE5' },
+  statusSnoozed: { backgroundColor: '#FEF3C7' },
+  statusSkipped: { backgroundColor: '#F3F4F6' },
+  statusText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  
+  // FAB
+  fab: { 
+    position: 'absolute', 
+    right: 20, 
+    bottom: 100, // Moved up to avoid covering content
+    width: 60, 
+    height: 60, 
+    borderRadius: 30, 
+    backgroundColor: '#1E3A8A', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    zIndex: 2000, 
+    elevation: 14, 
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 8 }, 
+    shadowOpacity: 0.16, 
+    shadowRadius: 16 
+  },
 
+  // Modal Styles
   modalContainer: { flex: 1, backgroundColor: '#F8F9FA' },
-  modalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#E5E7EB' },
+  modalHeader: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    padding: 16, 
+    borderBottomWidth: 1, 
+    borderBottomColor: '#E5E7EB',
+    backgroundColor: 'white'
+  },
   modalClose: { padding: 8 },
   modalTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937' },
   modalBody: { padding: 20 },
-  label: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
-  input: { backgroundColor: 'white', borderRadius: 12, padding: 14, marginBottom: 12, shadowColor: '#000', shadowOffset: { width:0, height:2 }, shadowOpacity: 0.03, shadowRadius: 6, elevation: 1 },
+  
+  // Form Elements
+  label: { fontSize: 16, fontWeight: '600', color: '#374151', marginBottom: 8, marginTop: 16 },
+  input: { 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    padding: 16, 
+    marginBottom: 16, 
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 2 }, 
+    shadowOpacity: 0.03, 
+    shadowRadius: 6, 
+    elevation: 1,
+    fontSize: 16
+  },
+  notesInput: { height: 80, textAlignVertical: 'top' },
+  
+  // Time Management
   addTimeText: { color: '#1E3A8A', fontWeight: '600' },
-  timeRowModal: { backgroundColor: 'white', padding: 8, marginRight: 8, borderRadius: 8, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', minWidth: 110, marginBottom: 8 },
-  timeTextModal: { fontWeight: '600', color: '#1F2937' },
-  smallBtn: { marginLeft: 8, padding: 6 },
-  inlinePicker: { backgroundColor: 'white', padding: 12, borderRadius: 12, marginTop: 12 },
-  timeInput: { width: 64, height: 44, borderRadius: 10, backgroundColor: '#F3F4F6', textAlign: 'center', fontWeight: '600' },
-  smallActionBtn: { paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, backgroundColor: '#1E3A8A', alignItems: 'center', justifyContent: 'center' },
-  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 12 },
-  toggle: { width: 42, height: 26, borderRadius: 20, backgroundColor: '#E5E7EB', justifyContent: 'center', padding: 3 },
+  timeRowModal: { 
+    backgroundColor: 'white', 
+    padding: 12, 
+    marginRight: 8, 
+    borderRadius: 12, 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'space-between', 
+    minWidth: 120, 
+    marginBottom: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1
+  },
+  timeTextModal: { fontWeight: '600', color: '#1F2937', fontSize: 16 },
+  smallBtn: { marginLeft: 8, padding: 8 },
+  
+  // Toggle
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 16 },
+  toggle: { width: 50, height: 30, borderRadius: 15, backgroundColor: '#E5E7EB', justifyContent: 'center', padding: 3 },
   toggleOn: { backgroundColor: '#1E3A8A' },
-  toggleKnob: { width: 18, height: 18, borderRadius: 9, backgroundColor: 'white', transform: [{ translateX: 0 }] },
-  saveBtn: { backgroundColor: '#1E3A8A', padding: 12, borderRadius: 12, alignItems: 'center', marginTop: 16 },
-  saveText: { color: 'white', fontWeight: '700' },
+  toggleKnob: { width: 24, height: 24, borderRadius: 12, backgroundColor: 'white', transform: [{ translateX: 0 }] },
+  
+  // Advanced Scheduling
+  scheduleRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 },
+  dateButton: { 
+    flex: 1, 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    padding: 16, 
+    flexDirection: 'row', 
+    alignItems: 'center',
+    marginHorizontal: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
+  },
+  dateButtonText: { marginLeft: 8, fontSize: 14, color: '#1F2937' },
+  
+  frequencyContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
+  frequencyButton: { 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    paddingHorizontal: 16, 
+    paddingVertical: 12, 
+    marginRight: 8, 
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
+  },
+  frequencyButtonActive: { backgroundColor: '#1E3A8A', borderColor: '#1E3A8A' },
+  frequencyButtonText: { fontSize: 14, fontWeight: '600', color: '#374151' },
+  frequencyButtonTextActive: { color: 'white' },
+  
+  daysContainer: { marginBottom: 16 },
+  daysRow: { flexDirection: 'row', flexWrap: 'wrap' },
+  dayButton: { 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    paddingHorizontal: 12, 
+    paddingVertical: 8, 
+    marginRight: 8, 
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB'
+  },
+  dayButtonActive: { backgroundColor: '#1E3A8A', borderColor: '#1E3A8A' },
+  dayButtonText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  dayButtonTextActive: { color: 'white' },
+  
+  // Color Picker
+  colorContainer: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 16 },
+  colorButton: { 
+    width: 40, 
+    height: 40, 
+    borderRadius: 20, 
+    marginRight: 12, 
+    marginBottom: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'transparent'
+  },
+  colorButtonActive: { borderColor: '#1F2937' },
+  
+  // Save Button
+  saveBtn: { 
+    backgroundColor: '#1E3A8A', 
+    padding: 16, 
+    borderRadius: 12, 
+    alignItems: 'center', 
+    marginTop: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4
+  },
+  saveText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  
+  // Time Picker Modal
   timeModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
-  timeModalContent: { backgroundColor: 'white', marginHorizontal: 24, borderRadius: 12, padding: 16, alignItems: 'center', shadowColor: '#000', shadowOffset: { width:0, height:6 }, shadowOpacity: 0.12, shadowRadius: 12, elevation: 10 },
-  timeModalTitle: { fontSize: 16, fontWeight: '700', color: '#1F2937', marginBottom: 6 },
-  timeModalPreview: { fontSize: 22, fontWeight: '700', color: '#1E3A8A', marginBottom: 12 },
-  timeModalButtons: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
-  outlineBtn: { borderWidth: 1, borderColor: '#1E3A8A', paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: 'white' },
-  outlineBtnText: { color: '#1E3A8A', fontWeight: '700' },
-  secondaryBtn: { paddingHorizontal: 12, paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
-  secondaryBtnText: { color: '#374151', fontWeight: '700' },
-  primarySmallBtn: { backgroundColor: '#1E3A8A', paddingHorizontal: 14, paddingVertical: 10, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  primarySmallBtnText: { color: 'white', fontWeight: '700' },
-  modalAnimatedContainer: { backgroundColor: 'white', borderRadius: 16, padding: 20, borderWidth: 1, borderColor: '#E0E0E0', shadowColor: '#000', shadowOffset: { width:0, height:6 }, shadowOpacity: 0.08, shadowRadius: 12, elevation: 12 },
-  pickerLabel: { fontSize: 16, fontWeight: '600', color: '#1F2937', marginBottom: 8, textAlign: 'center' },
-  wheelWrap: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 6 },
+  timeModalContent: { 
+    backgroundColor: 'white', 
+    marginHorizontal: 24, 
+    borderRadius: 16, 
+    padding: 20, 
+    alignItems: 'center', 
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 8 }, 
+    shadowOpacity: 0.15, 
+    shadowRadius: 16, 
+    elevation: 12 
+  },
+  timeModalTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937', marginBottom: 8 },
+  timeModalPreview: { fontSize: 24, fontWeight: '700', color: '#1E3A8A', marginBottom: 16 },
+  timeModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  
+  // Wheel Picker
+  pickerLabel: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#6B7280', 
+    textAlign: 'center', 
+    marginBottom: 8 
+  },
+  wheelWrap: { flexDirection: 'row', justifyContent: 'center', alignItems: 'center', paddingVertical: 8 },
   wheelColumn: { width: 80, height: 44 * 3, overflow: 'hidden' },
   wheelColumnSeparator: { width: 20, alignItems: 'center', justifyContent: 'center' },
   wheelItem: { height: 44, alignItems: 'center', justifyContent: 'center' },
   wheelItemSelected: { backgroundColor: 'transparent' },
   wheelItemText: { fontSize: 22, color: '#374151' },
-  wheelItemTextSelected: { color: '#0A2E68', fontWeight: '700' },
-  previewText: { textAlign: 'center', color: '#6B7280', marginTop: 8 },
-  timeModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  avatarInitial: { color: 'white', fontWeight: '700', fontSize: 16 },
-  actionBtn: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', marginBottom: 8, shadowColor: '#000', shadowOffset: { width:0, height:4 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 3 },
-  actionBtnGreen: { backgroundColor: '#22C55E' },
-  actionBtnOrange: { backgroundColor: '#F59E0B' },
-  actionBtnBlue: { backgroundColor: '#2563EB' },
-  actionBtnRed: { backgroundColor: '#EF4444' },
+  wheelItemTextSelected: { color: '#1E3A8A', fontWeight: '700' },
+  previewText: { textAlign: 'center', color: '#6B7280', marginTop: 12, fontSize: 14 },
+  
+  // Date Picker Modal
+  dateModalWrapper: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  dateModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },
+  dateModalContent: { 
+    backgroundColor: 'white', 
+    marginHorizontal: 24, 
+    borderRadius: 16, 
+    padding: 20, 
+    alignItems: 'center', 
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 8 }, 
+    shadowOpacity: 0.15, 
+    shadowRadius: 16, 
+    elevation: 12,
+    minWidth: 300
+  },
+  dateModalTitle: { fontSize: 18, fontWeight: '700', color: '#1F2937', marginBottom: 16 },
+  
+  // Custom Date Picker
+  datePickerContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: 16,
+    height: 200
+  },
+  pickerColumn: { 
+    flex: 1, 
+    marginHorizontal: 4,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 8
+  },
+  pickerScroll: { 
+    flex: 1,
+    maxHeight: 160
+  },
+  pickerOption: { 
+    paddingVertical: 8, 
+    paddingHorizontal: 4, 
+    borderRadius: 8, 
+    marginVertical: 2,
+    alignItems: 'center'
+  },
+  pickerOptionSelected: { 
+    backgroundColor: '#1E3A8A' 
+  },
+  pickerOptionText: { 
+    fontSize: 16, 
+    color: '#374151',
+    fontWeight: '500'
+  },
+  pickerOptionTextSelected: { 
+    color: 'white', 
+    fontWeight: '700' 
+  },
+  
+  // Time Picker
+  timePickerContainer: { 
+    flexDirection: 'row', 
+    justifyContent: 'space-between', 
+    marginBottom: 16,
+    height: 200
+  },
+  timePickerColumn: { 
+    flex: 1, 
+    marginHorizontal: 8,
+    backgroundColor: '#F9FAFB',
+    borderRadius: 12,
+    padding: 8
+  },
+  timePickerLabel: { 
+    fontSize: 14, 
+    fontWeight: '600', 
+    color: '#6B7280', 
+    textAlign: 'center', 
+    marginBottom: 8 
+  },
+  timePickerScroll: { 
+    flex: 1,
+    maxHeight: 160
+  },
+  timePickerOption: { 
+    paddingVertical: 6, 
+    paddingHorizontal: 4, 
+    borderRadius: 8, 
+    marginVertical: 1,
+    alignItems: 'center'
+  },
+  timePickerOptionSelected: { 
+    backgroundColor: '#1E3A8A' 
+  },
+  timePickerOptionText: { 
+    fontSize: 14, 
+    color: '#374151',
+    fontWeight: '500'
+  },
+  timePickerOptionTextSelected: { 
+    color: 'white', 
+    fontWeight: '700' 
+  },
+  dateInput: { 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    padding: 16, 
+    marginBottom: 16, 
+    borderWidth: 1, 
+    borderColor: '#E5E7EB',
+    fontSize: 16,
+    textAlign: 'center'
+  },
+  timeInput: { 
+    backgroundColor: 'white', 
+    borderRadius: 12, 
+    padding: 16, 
+    marginBottom: 16, 
+    borderWidth: 1, 
+    borderColor: '#E5E7EB',
+    fontSize: 16,
+    textAlign: 'center'
+  },
+  dateModalButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 16, width: '100%' },
+  dateModalCancelButton: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, backgroundColor: '#F3F4F6' },
+  dateModalCancelText: { color: '#374151', fontWeight: '700' },
+  dateModalDoneButton: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, backgroundColor: '#1E3A8A' },
+  dateModalDoneText: { color: 'white', fontWeight: '700' },
+  
+  // Buttons
+  secondaryBtn: { paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
+  secondaryBtnText: { color: '#374151', fontWeight: '700' },
+  primarySmallBtn: { backgroundColor: '#1E3A8A', paddingHorizontal: 16, paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  primarySmallBtnText: { color: 'white', fontWeight: '700' },
 });
