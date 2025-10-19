@@ -5,6 +5,7 @@ import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
+// import * as Notifications from 'expo-notifications';
 
 // ProgressBar removed (unused) — visual progress is handled inline with animated circle
 
@@ -14,7 +15,7 @@ export default function Hydration() {
   const [entries, setEntries] = useState<any[]>([]);
   const [amountInput, setAmountInput] = useState('');
   const [loading, setLoading] = useState(true);
-  const [historyRange, setHistoryRange] = useState<'daily'|'weekly'|'monthly'>('daily');
+  const [historyRange] = useState<'daily'|'weekly'|'monthly'>('daily');
   const [historyData, setHistoryData] = useState<any[]>([]);
   const [missedCount, setMissedCount] = useState<number>(0);
   const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -26,35 +27,6 @@ export default function Hydration() {
     try { return n.toLocaleString(); } catch { return String(n); }
   };
 
-  function chartItems() {
-    if (!historyData || historyData.length === 0) return [];
-    
-    return historyData.map((h:any) => {
-      let label = '';
-      let amount = h.amount_ml || 0;
-      
-      if (h.date) {
-        // Use day name for daily view (Mon, Tue, etc.)
-        label = h.day_name || new Date(h.date).toLocaleDateString('en', { weekday: 'short' });
-      } else if (h.week_start) {
-        // Use week label from backend
-        label = h.week_label || new Date(h.week_start).toLocaleDateString('en', { month: 'short', day: 'numeric' });
-      } else if (h.month) {
-        // Use month label from backend
-        label = h.month_label || new Date(h.month + '-01').toLocaleDateString('en', { month: 'short', year: '2-digit' });
-      } else {
-        // fallback
-        label = String(Object.values(h)[0] || '').slice(0, 5);
-      }
-      
-      return { label, amount, isToday: h.is_today || false };
-    });
-  }
-
-  function getMaxAmount() {
-    if (!historyData || historyData.length === 0) return goal;
-    return Math.max(...historyData.map(h => h.amount_ml || 0), goal);
-  }
 
   // Calendar functions
   function generateCalendarDays() {
@@ -187,6 +159,10 @@ export default function Hydration() {
     const newEntries = [...entries, entry];
     setEntries(newEntries);
     await persistLocal({ goal, entries: newEntries });
+    
+    // Schedule next hydration reminder
+    await scheduleHydrationReminder();
+    
     // optimistic server sync
     if (token) {
       try {
@@ -195,6 +171,11 @@ export default function Hydration() {
         console.log('Hydration sync error', err);
       }
     }
+  }
+
+  async function scheduleHydrationReminder() {
+    // Temporarily disabled - notifications will be enabled after Metro restart
+    console.log('Hydration reminder scheduling temporarily disabled');
   }
 
   async function submitCustom() {
