@@ -11,4 +11,9 @@ class HydrationEntry extends Model
     protected $table = 'hydration_entries';
     protected $fillable = ['user_id', 'amount_ml', 'source', 'created_at'];
     public $timestamps = false;
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
+    }
 }

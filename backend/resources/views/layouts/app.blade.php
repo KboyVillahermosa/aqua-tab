@@ -57,5 +57,8 @@
 
   {{-- Alpine.js for simple toggle (CDN) --}}
   <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+  
+  {{-- Stack for page-specific scripts --}}
+  @stack('scripts')
 </body>
 </html>
