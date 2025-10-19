@@ -189,9 +189,22 @@ let systemHealthChart, userActivityChart;
 
 // Initialize charts
 function initCharts() {
+    console.log('Initializing dashboard charts...');
+    
+    // Check if Chart.js is loaded
+    if (typeof Chart === 'undefined') {
+        console.error('Chart.js is not loaded!');
+        return;
+    }
+    
     // System Health Chart
-    const healthCtx = document.getElementById('systemHealthChart').getContext('2d');
-    systemHealthChart = new Chart(healthCtx, {
+    const healthCtx = document.getElementById('systemHealthChart');
+    if (!healthCtx) {
+        console.error('System health chart canvas not found!');
+        return;
+    }
+    
+    systemHealthChart = new Chart(healthCtx.getContext('2d'), {
         type: 'doughnut',
         data: {
             labels: ['Hydration', 'Medication', 'Notifications'],
@@ -216,8 +229,13 @@ function initCharts() {
     });
 
     // User Activity Chart
-    const activityCtx = document.getElementById('userActivityChart').getContext('2d');
-    userActivityChart = new Chart(activityCtx, {
+    const activityCtx = document.getElementById('userActivityChart');
+    if (!activityCtx) {
+        console.error('User activity chart canvas not found!');
+        return;
+    }
+    
+    userActivityChart = new Chart(activityCtx.getContext('2d'), {
         type: 'line',
         data: {
             labels: [],
@@ -239,13 +257,18 @@ function initCharts() {
             }
         }
     });
+    
+    console.log('All dashboard charts initialized successfully!');
 }
 
 // Load dashboard data
 async function loadDashboardData() {
     try {
+        console.log('Loading dashboard data...');
         const response = await fetch('/api/admin/dashboard-stats');
+        console.log('Response status:', response.status);
         const data = await response.json();
+        console.log('Received dashboard data:', data);
 
         // Update stats cards
         document.getElementById('activeHydrationUsers').textContent = data.active_hydration_users || 0;
@@ -253,20 +276,28 @@ async function loadDashboardData() {
         document.getElementById('notificationsSent').textContent = data.notifications_sent || 0;
 
         // Update system health chart
-        systemHealthChart.data.datasets[0].data = [
-            data.hydration_entries || 0,
-            data.medication_entries || 0,
-            data.notifications_sent || 0
-        ];
-        systemHealthChart.update();
+        if (systemHealthChart) {
+            systemHealthChart.data.datasets[0].data = [
+                data.hydration_entries || 0,
+                data.medication_entries || 0,
+                data.notifications_sent || 0
+            ];
+            systemHealthChart.update();
+        }
 
         // Update user activity chart
-        userActivityChart.data.labels = data.user_activity.map(item => item.date);
-        userActivityChart.data.datasets[0].data = data.user_activity.map(item => item.active_users);
-        userActivityChart.update();
+        if (userActivityChart && data.user_activity && data.user_activity.length > 0) {
+            userActivityChart.data.labels = data.user_activity.map(item => item.date);
+            userActivityChart.data.datasets[0].data = data.user_activity.map(item => item.active_users);
+            userActivityChart.update();
+        }
 
     } catch (error) {
         console.error('Error loading dashboard data:', error);
+        // Show error in UI
+        document.getElementById('activeHydrationUsers').textContent = 'Error';
+        document.getElementById('activeMedications').textContent = 'Error';
+        document.getElementById('notificationsSent').textContent = 'Error';
     }
 }
 
