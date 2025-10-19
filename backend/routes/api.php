@@ -27,6 +27,15 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
         Route::post('hydration/goal', [App\Http\Controllers\HydrationController::class, 'setGoal']);
         Route::get('hydration/history', [App\Http\Controllers\HydrationController::class, 'history']);
         Route::post('hydration/missed', [App\Http\Controllers\HydrationController::class, 'missed']);
+
+    // Reminders endpoints
+    Route::get('reminders', [App\Http\Controllers\RemindersController::class, 'index']);
+    Route::post('reminders', [App\Http\Controllers\RemindersController::class, 'store']);
+    Route::put('reminders/{id}', [App\Http\Controllers\RemindersController::class, 'update']);
+    Route::delete('reminders/{id}', [App\Http\Controllers\RemindersController::class, 'destroy']);
+    Route::post('reminders/{id}/snooze', [App\Http\Controllers\RemindersController::class, 'snooze']);
+    Route::post('reminders/{id}/missed', [App\Http\Controllers\RemindersController::class, 'missed']);
+    Route::get('reminders/stats', [App\Http\Controllers\RemindersController::class, 'stats']);
 });
 
 // If the app doesn't have the middleware registered, add a fallback route to demonstrate

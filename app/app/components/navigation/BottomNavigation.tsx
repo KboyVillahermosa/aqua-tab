@@ -18,14 +18,14 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     
     if (pathname.includes('/home')) return 'home';
     if (pathname.includes('/components/pages/category')) return 'categories';
-    if (pathname.includes('/components/pages/timeline')) return 'timeline';
+    if (pathname.includes('/components/pages/notification') || pathname.includes('/notification')) return 'notifications';
     if (pathname.includes('/components/pages/profile')) return 'profile';
     if (pathname.includes('/components/pages/settings')) return 'settings';
     return 'home';
   };
 
   const activeTab = getActiveTab();
-
+      if (pathname.includes('/components/pages/hydration') || pathname.includes('/hydration')) return 'hydration';
   const navigationItems = [
     { 
       key: 'home', 
@@ -39,12 +39,11 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
       label: 'Categories',
       route: '/components/pages/category/Categories'
     },
-
     { 
-      key: 'timeline', 
-      icon: 'time', 
-      label: 'Timeline',
-      route: '/components/pages/timeline/Timeline'
+      key: 'notifications',
+      icon: 'notifications',
+      label: 'Alerts',
+      route: '/components/pages/notification/Notification'
     },
     { 
       key: 'profile', 

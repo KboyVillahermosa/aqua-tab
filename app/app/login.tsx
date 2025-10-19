@@ -92,8 +92,6 @@ export default function Login() {
         return;
       }
 
-      // Send the code to your backend which will exchange it for tokens
-      // and return your app session token.
       const res = await api.post('/oauth/google', { code, redirect_uri: redirectUri });
       router.replace({ pathname: '/home', params: { token: res.token } } as any);
     } catch (err: any) {

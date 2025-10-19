@@ -24,6 +24,7 @@ function joinPath(path: string) {
 export async function post(path: string, body: any, token?: string) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  console.log('API POST:', joinPath(path), 'headers=', headers, 'body=', body);
   const res = await fetch(joinPath(path), {
     method: 'POST',
     headers,
@@ -37,6 +38,7 @@ export async function post(path: string, body: any, token?: string) {
 export async function get(path: string, token?: string) {
   const headers: any = { Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  console.log('API GET:', joinPath(path), 'headers=', headers);
   const res = await fetch(joinPath(path), { headers });
   const data = await parseResponse(res);
   if (!res.ok) throw { status: res.status, data };
@@ -46,6 +48,7 @@ export async function get(path: string, token?: string) {
 export async function put(path: string, body: any, token?: string) {
   const headers: any = { 'Content-Type': 'application/json', Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  console.log('API PUT:', joinPath(path), 'headers=', headers, 'body=', body);
   const res = await fetch(joinPath(path), {
     method: 'PUT',
     headers,
@@ -59,6 +62,7 @@ export async function put(path: string, body: any, token?: string) {
 export async function del(path: string, token?: string) {
   const headers: any = { Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  console.log('API DEL:', joinPath(path), 'headers=', headers);
   const res = await fetch(joinPath(path), { method: 'DELETE', headers });
   const data = await parseResponse(res);
   if (!res.ok) throw { status: res.status, data };

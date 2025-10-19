@@ -31,6 +31,8 @@ class TokenAuth
         $request->setUserResolver(function () use ($user) {
             return $user;
         });
+        // also set a request attribute for older controllers expecting 'auth_user'
+        $request->attributes->set('auth_user', $user);
         Log::debug('TokenAuth: user resolved from token', ['user_id' => $user->id]);
 
         return $next($request);
