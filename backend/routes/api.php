@@ -29,6 +29,18 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
         Route::post('hydration/goal', [App\Http\Controllers\HydrationController::class, 'setGoal']);
         Route::get('hydration/history', [App\Http\Controllers\HydrationController::class, 'history']);
         Route::post('hydration/missed', [App\Http\Controllers\HydrationController::class, 'missed']);
+
+        // Notification endpoints
+        Route::get('notifications', [App\Http\Controllers\NotificationController::class, 'index']);
+        Route::post('notifications', [App\Http\Controllers\NotificationController::class, 'store']);
+        Route::put('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'update']);
+        Route::delete('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'destroy']);
+        Route::post('notifications/schedule/hydration', [App\Http\Controllers\NotificationController::class, 'scheduleHydration']);
+        Route::post('notifications/schedule/medication', [App\Http\Controllers\NotificationController::class, 'scheduleMedication']);
+        Route::post('notifications/{notification}/snooze', [App\Http\Controllers\NotificationController::class, 'snooze']);
+        Route::post('notifications/{notification}/complete', [App\Http\Controllers\NotificationController::class, 'complete']);
+        Route::get('notifications/stats', [App\Http\Controllers\NotificationController::class, 'getStats']);
+        Route::post('notifications/mark-missed', [App\Http\Controllers\NotificationController::class, 'markMissedNotifications']);
 });
 
 // If the app doesn't have the middleware registered, add a fallback route to demonstrate

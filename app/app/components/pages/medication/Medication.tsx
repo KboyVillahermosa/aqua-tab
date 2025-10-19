@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+// import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
@@ -165,7 +166,7 @@ export default function Medication() {
     setModalVisible(true);
   }
 
-  function saveMedication() {
+  async function saveMedication() {
     if (!name.trim()) return Alert.alert('Validation', 'Please enter a name');
     if (!times.length) return Alert.alert('Validation', 'Please add at least one reminder time');
     
@@ -194,19 +195,29 @@ export default function Medication() {
       notes,
       color
     };
+    
     if (editing) {
       setMeds((s) => s.map((x) => (x.id === med.id ? med : x)));
       if (token) {
         // update on server
-        api.put(`/medications/${med.id}`, med, token as string).catch(()=>{});
+        await api.put(`/medications/${med.id}`, med, token as string).catch(()=>{});
+        // Schedule medication reminders
+        await scheduleMedicationReminders(med);
       }
     } else {
       setMeds((s) => [med, ...s]);
       if (token) {
-        api.post('/medications', med, token as string).catch(()=>{});
+        await api.post('/medications', med, token as string).catch(()=>{});
+        // Schedule medication reminders
+        await scheduleMedicationReminders(med);
       }
     }
     setModalVisible(false);
+  }
+
+  async function scheduleMedicationReminders(medication: MedicationItem) {
+    // Temporarily disabled - notifications will be enabled after Metro restart
+    console.log('Medication reminder scheduling temporarily disabled');
   }
 
   async function deleteMedication(id: string) {
@@ -272,21 +283,29 @@ export default function Medication() {
     setTimes((t) => t.filter((_, i) => i !== idx));
   }
 
-  function markTaken(medId: string, timeIso?: string) {
+  async function markTaken(medId: string, timeIso?: string) {
     const entry: HistoryEntry = { id: uid(), medId, time: timeIso || new Date().toISOString(), status: 'completed' };
     setHistory((h) => [entry, ...h]);
+    
+    // Cancel any pending notifications for this medication (temporarily disabled)
+    console.log('Notification cancellation temporarily disabled');
+    
     if (token) {
-      api.post(`/medications/${medId}/history`, { status: 'completed', time: entry.time }, token as string).catch(()=>{});
+      await api.post(`/medications/${medId}/history`, { status: 'completed', time: entry.time }, token as string).catch(()=>{});
     }
   }
 
-  function snooze(medId: string, mins = 15) {
+  async function snooze(medId: string, mins = 15) {
     const snoozedTime = new Date(Date.now() + mins * 60 * 1000).toISOString();
     const entry: HistoryEntry = { id: uid(), medId, time: snoozedTime, status: 'snoozed' };
     setHistory((h) => [entry, ...h]);
+    
+    // Reschedule notification (temporarily disabled)
+    console.log('Notification rescheduling temporarily disabled');
+    
     Alert.alert('Snoozed', `Reminder snoozed by ${mins} minutes`);
     if (token) {
-      api.post(`/medications/${medId}/history`, { status: 'snoozed', time: entry.time }, token as string).catch(()=>{});
+      await api.post(`/medications/${medId}/history`, { status: 'snoozed', time: entry.time }, token as string).catch(()=>{});
     }
   }
 
@@ -354,7 +373,7 @@ export default function Medication() {
         <View style={styles.headerSection}>
           <Text style={styles.headerTitle}>Medications</Text>
           <Text style={styles.headerSubtitle}>Manage your medication schedule</Text>
-      </View>
+        </View>
 
         {/* Stats Dashboard */}
         {stats && (
@@ -362,7 +381,7 @@ export default function Medication() {
             <View style={styles.statCard}>
               <Text style={styles.statNumber}>{stats.total_medications}</Text>
               <Text style={styles.statLabel}>Total</Text>
-            </View>
+      </View>
             <View style={styles.statCard}>
               <Text style={styles.statNumber}>{stats.active_medications}</Text>
               <Text style={styles.statLabel}>Active</Text>

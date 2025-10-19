@@ -104,9 +104,9 @@ export default function Home() {
             <Text style={styles.categoryText}>Hydration</Text>
           </TouchableOpacity>
           
-          <TouchableOpacity style={styles.categoryCard}>
-            <Ionicons name="alarm" size={32} color="white" />
-            <Text style={styles.categoryText}>Reminder</Text>
+          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any)}>
+            <Ionicons name="notifications" size={32} color="white" />
+            <Text style={styles.categoryText}>Reminders</Text>
           </TouchableOpacity>
           
           <TouchableOpacity style={styles.categoryCard}>
