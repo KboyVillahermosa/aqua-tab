@@ -17,8 +17,9 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     if (currentRoute) return currentRoute;
     
     if (pathname.includes('/home')) return 'home';
-    if (pathname.includes('/components/pages/category')) return 'categories';
-    if (pathname.includes('/components/pages/timeline')) return 'timeline';
+    if (pathname.includes('/components/pages/hydration')) return 'hydration';
+    if (pathname.includes('/components/pages/medication')) return 'medication';
+    if (pathname.includes('/components/pages/notification')) return 'notification';
     if (pathname.includes('/components/pages/profile')) return 'profile';
     if (pathname.includes('/components/pages/settings')) return 'settings';
     return 'home';
@@ -34,29 +35,28 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
       route: '/home'
     },
     { 
-      key: 'categories', 
-      icon: 'grid', 
-      label: 'Categories',
-      route: '/components/pages/category/Categories'
+      key: 'hydration', 
+      icon: 'water', 
+      label: 'Hydration',
+      route: '/components/pages/hydration/Hydration'
     },
-
     { 
-      key: 'timeline', 
-      icon: 'time', 
-      label: 'Timeline',
-      route: '/components/pages/timeline/Timeline'
+      key: 'medication', 
+      icon: 'medical', 
+      label: 'Medication',
+      route: '/components/pages/medication/Medication'
+    },
+    { 
+      key: 'notification', 
+      icon: 'notifications', 
+      label: 'Reminders',
+      route: '/components/pages/notification/Notification'
     },
     { 
       key: 'profile', 
       icon: 'person', 
       label: 'Profile',
       route: '/components/pages/profile/Profile'
-    },
-    { 
-      key: 'settings', 
-      icon: 'settings', 
-      label: 'Settings',
-      route: '/components/pages/settings/Settings'
     },
   ];
 
