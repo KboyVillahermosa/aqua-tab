@@ -188,7 +188,7 @@ class AdminController extends Controller
                 ->distinct('user_id')
                 ->count('user_id');
 
-            $activeMedications = Medication::where('is_active', true)->count();
+            $activeMedications = Medication::where('reminder', true)->count();
             $notificationsSent = Notification::count();
 
             // Get hydration entries count
