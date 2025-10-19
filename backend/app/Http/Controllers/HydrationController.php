@@ -5,6 +5,8 @@ namespace App\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\Log;
+use DateTime;
+use DateInterval;
 // optional DB model
 use App\Models\HydrationEntry;
 
@@ -281,5 +283,139 @@ class HydrationController
         $this->writeData($user->id, $data);
         Log::debug('Hydration missed', ['user' => $user->id, 'timestamp' => $ts]);
         return response()->json(['timestamp' => $ts], 201);
+    }
+
+    // GET /api/hydration/stats?days=7|30|90
+    public function stats(Request $request)
+    {
+        $days = (int) $request->query('days', 30);
+        if (!in_array($days, [7, 30, 90])) {
+            $days = 30;
+        }
+
+        try {
+            // Get total users count
+            $totalUsers = \App\Models\User::count();
+
+            // Get hydration data from database
+            $startDate = now()->subDays($days);
+            
+            // Calculate average daily intake per user
+            $avgDailyIntake = HydrationEntry::where('created_at', '>=', $startDate)
+                ->selectRaw('user_id, DATE(created_at) as date, SUM(amount_ml) as daily_total')
+                ->groupBy('user_id', 'date')
+                ->get()
+                ->avg('daily_total') ?? 0;
+
+            // Calculate goal achievement rate
+            $goalAchievementRate = 0;
+            if (class_exists(HydrationEntry::class)) {
+                $userGoals = [];
+                $userAchievements = [];
+                
+                // Get all users and their goals/achievements
+                $users = \App\Models\User::all();
+                foreach ($users as $user) {
+                    $file = $this->readData($user->id);
+                    $goal = $file['goal'] ?? 2000;
+                    
+                    $dailyTotals = HydrationEntry::where('user_id', $user->id)
+                        ->where('created_at', '>=', $startDate)
+                        ->selectRaw('DATE(created_at) as date, SUM(amount_ml) as daily_total')
+                        ->groupBy('date')
+                        ->get();
+                    
+                    foreach ($dailyTotals as $day) {
+                        $achieved = $day->daily_total >= $goal ? 1 : 0;
+                        $userAchievements[] = $achieved;
+                    }
+                }
+                
+                if (count($userAchievements) > 0) {
+                    $goalAchievementRate = round((array_sum($userAchievements) / count($userAchievements)) * 100, 1);
+                }
+            }
+
+            // Count missed reminders
+            $missedReminders = 0;
+            $users = \App\Models\User::all();
+            foreach ($users as $user) {
+                $file = $this->readData($user->id);
+                $missedReminders += count($file['missed'] ?? []);
+            }
+
+            // Daily intake data for chart
+            $dailyIntake = [];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $date = now()->subDays($i)->format('Y-m-d');
+                $totalAmount = HydrationEntry::whereDate('created_at', $date)
+                    ->sum('amount_ml') ?? 0;
+                
+                $dailyIntake[] = [
+                    'date' => $date,
+                    'total_amount' => $totalAmount
+                ];
+            }
+
+            // Weekly trend data
+            $weeklyTrend = [];
+            $weeks = ceil($days / 7);
+            for ($w = $weeks - 1; $w >= 0; $w--) {
+                $weekStart = now()->subWeeks($w)->startOfWeek();
+                $weekEnd = now()->subWeeks($w)->endOfWeek();
+                
+                $weekTotal = HydrationEntry::whereBetween('created_at', [$weekStart, $weekEnd])
+                    ->sum('amount_ml') ?? 0;
+                
+                $avgIntake = $weekTotal / 7; // Average per day
+                
+                $weeklyTrend[] = [
+                    'week' => $weekStart->format('M j'),
+                    'avg_intake' => round($avgIntake)
+                ];
+            }
+
+            // Recent entries
+            $recentEntries = HydrationEntry::with('user')
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get()
+                ->map(function ($entry) {
+                    $file = $this->readData($entry->user_id);
+                    $goal = $file['goal'] ?? 2000;
+                    
+                    // Handle both Carbon instances and string dates
+                    $date = is_string($entry->created_at) ? $entry->created_at : $entry->created_at->format('Y-m-d');
+                    
+                    return [
+                        'user_name' => $entry->user->name ?? 'Unknown User',
+                        'total_amount' => $entry->amount_ml,
+                        'goal' => $goal,
+                        'date' => $date
+                    ];
+                });
+
+            return response()->json([
+                'total_users' => $totalUsers,
+                'avg_daily_intake' => round($avgDailyIntake),
+                'goal_achievement_rate' => $goalAchievementRate,
+                'missed_reminders' => $missedReminders,
+                'daily_intake' => $dailyIntake,
+                'weekly_trend' => $weeklyTrend,
+                'recent_entries' => $recentEntries
+            ]);
+
+        } catch (\Exception $e) {
+            Log::error('Hydration stats error', ['error' => $e->getMessage()]);
+            return response()->json([
+                'total_users' => 0,
+                'avg_daily_intake' => 0,
+                'goal_achievement_rate' => 0,
+                'missed_reminders' => 0,
+                'daily_intake' => [],
+                'weekly_trend' => [],
+                'recent_entries' => []
+            ], 500);
+        }
     }
 }

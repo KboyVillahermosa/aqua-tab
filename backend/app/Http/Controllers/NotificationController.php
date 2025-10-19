@@ -312,4 +312,132 @@ class NotificationController extends Controller
 
         return response()->json($stats);
     }
+
+    /**
+     * Get admin statistics for notification management
+     */
+    public function getAdminStats(Request $request)
+    {
+        $days = (int) $request->query('days', 30);
+        if (!in_array($days, [7, 30, 90])) {
+            $days = 30;
+        }
+
+        try {
+            $startDate = now()->subDays($days);
+            
+            // Get notification counts
+            $totalNotifications = NotificationModel::where('created_at', '>=', $startDate)->count();
+            $deliveredCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('status', 'delivered')
+                ->count();
+            $snoozedCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('status', 'snoozed')
+                ->count();
+            $missedCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('status', 'missed')
+                ->count();
+            $pendingCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('status', 'scheduled')
+                ->count();
+            
+            // Count by type
+            $hydrationCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('type', 'hydration')
+                ->count();
+            $medicationCount = NotificationModel::where('created_at', '>=', $startDate)
+                ->where('type', 'medication')
+                ->count();
+            
+            // Daily volume
+            $dailyVolume = [];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $date = now()->subDays($i)->format('Y-m-d');
+                $count = NotificationModel::whereDate('created_at', $date)->count();
+                
+                $dailyVolume[] = [
+                    'date' => $date,
+                    'count' => $count
+                ];
+            }
+            
+            // Response times (average time between scheduled and completed)
+            $responseTimes = [];
+            for ($i = $days - 1; $i >= 0; $i--) {
+                $date = now()->subDays($i)->format('Y-m-d');
+                
+                $notifications = NotificationModel::whereDate('created_at', $date)
+                    ->where('status', 'completed')
+                    ->whereNotNull('completed_at')
+                    ->get();
+                
+                $avgResponseTime = 0;
+                if ($notifications->count() > 0) {
+                    $totalMinutes = 0;
+                    foreach ($notifications as $notification) {
+                        $scheduled = Carbon::parse($notification->scheduled_time);
+                        $completed = Carbon::parse($notification->completed_at);
+                        $totalMinutes += $completed->diffInMinutes($scheduled);
+                    }
+                    $avgResponseTime = round($totalMinutes / $notifications->count(), 1);
+                }
+                
+                $responseTimes[] = [
+                    'date' => $date,
+                    'avg_response_time' => $avgResponseTime
+                ];
+            }
+            
+            // Recent notifications
+            $recentNotifications = NotificationModel::with('user')
+                ->orderBy('created_at', 'desc')
+                ->limit(10)
+                ->get()
+                ->map(function ($notification) {
+                    $responseTime = null;
+                    if ($notification->status === 'completed' && $notification->completed_at) {
+                        $scheduled = Carbon::parse($notification->scheduled_time);
+                        $completed = Carbon::parse($notification->completed_at);
+                        $responseTime = $completed->diffInMinutes($scheduled);
+                    }
+                    
+                    return [
+                        'user_name' => $notification->user->name ?? 'Unknown User',
+                        'type' => $notification->type,
+                        'title' => $notification->title,
+                        'status' => $notification->status,
+                        'scheduled_at' => $notification->scheduled_time,
+                        'response_time' => $responseTime
+                    ];
+                });
+
+            return response()->json([
+                'total_notifications' => $totalNotifications,
+                'delivered_count' => $deliveredCount,
+                'snoozed_count' => $snoozedCount,
+                'missed_count' => $missedCount,
+                'pending_count' => $pendingCount,
+                'hydration_count' => $hydrationCount,
+                'medication_count' => $medicationCount,
+                'daily_volume' => $dailyVolume,
+                'response_times' => $responseTimes,
+                'recent_notifications' => $recentNotifications
+            ]);
+
+        } catch (\Exception $e) {
+            \Log::error('Notification admin stats error', ['error' => $e->getMessage()]);
+            return response()->json([
+                'total_notifications' => 0,
+                'delivered_count' => 0,
+                'snoozed_count' => 0,
+                'missed_count' => 0,
+                'pending_count' => 0,
+                'hydration_count' => 0,
+                'medication_count' => 0,
+                'daily_volume' => [],
+                'response_times' => [],
+                'recent_notifications' => []
+            ], 500);
+        }
+    }
 }
