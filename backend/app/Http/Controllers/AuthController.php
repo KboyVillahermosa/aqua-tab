@@ -14,20 +14,32 @@ class AuthController extends Controller
         $data = $request->validate([
             'name' => 'required|string|max:255',
             'email' => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6',
+            'password' => 'required|string|min:6|confirmed',
+            'phone' => 'nullable|string|max:20',
+            'date_of_birth' => 'nullable|date|before:today',
+            'gender' => 'nullable|in:male,female,other',
+            'address' => 'nullable|string|max:500',
         ]);
 
         $user = User::create([
             'name' => $data['name'],
             'email' => $data['email'],
             'password' => $data['password'], // hashed via cast in model
+            'phone' => $data['phone'] ?? null,
+            'date_of_birth' => $data['date_of_birth'] ?? null,
+            'gender' => $data['gender'] ?? null,
+            'address' => $data['address'] ?? null,
         ]);
 
         // simple token
         $token = Str::random(60);
         $user->forceFill(['api_token' => hash('sha256', $token)])->save();
 
-        return response()->json(['token' => $token, 'user' => $user], 201);
+        return response()->json([
+            'token' => $token, 
+            'user' => $user,
+            'onboarding_completed' => $user->onboarding_completed,
+        ], 201);
     }
 
     public function login(Request $request)
@@ -46,7 +58,11 @@ class AuthController extends Controller
         $token = Str::random(60);
         $user->forceFill(['api_token' => hash('sha256', $token)])->save();
 
-        return response()->json(['token' => $token, 'user' => $user]);
+        return response()->json([
+            'token' => $token, 
+            'user' => $user,
+            'onboarding_completed' => $user->onboarding_completed,
+        ]);
     }
 
     public function logout(Request $request)

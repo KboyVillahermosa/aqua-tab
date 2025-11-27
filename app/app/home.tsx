@@ -7,10 +7,22 @@ import BottomNavigation from './components/navigation/BottomNavigation';
 
 const { width } = Dimensions.get('window');
 
+interface TimelineItem {
+  id: number;
+  time: string;
+  title: string;
+  body: string;
+  type: string;
+  status: string;
+  status_text: string;
+  status_emoji: string;
+}
+
 export default function Home() {
   const { token } = useLocalSearchParams();
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
+  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,6 +32,25 @@ export default function Home() {
         const me = await api.get('/me', token as string);
         console.log('Home: /me response:', me);
         setUser(me);
+        
+        // Load timeline separately to avoid blocking on errors
+        try {
+          const timelineData = await api.get('/notifications/today-timeline', token as string);
+          console.log('Home: timeline data received:', timelineData);
+          console.log('Home: timeline data type:', typeof timelineData);
+          console.log('Home: is array?', Array.isArray(timelineData));
+          if (Array.isArray(timelineData)) {
+            console.log('Home: timeline count:', timelineData.length);
+            setTimeline(timelineData);
+          } else {
+            console.log('Home: timeline data is not an array, setting empty');
+            setTimeline([]);
+          }
+        } catch (timelineErr: any) {
+          console.log('Home: timeline error:', timelineErr);
+          console.log('Home: timeline error details:', JSON.stringify(timelineErr));
+          setTimeline([]);
+        }
       } catch (err: any) {
         console.log('Home /me error', err);
         const message = err?.data?.message || err?.data || err?.message || 'Failed to load user';
@@ -32,18 +63,23 @@ export default function Home() {
     load();
   }, [token, router]);
 
-  async function onLogout() {
-    try {
-      await api.post('/logout', {}, token as string);
-    } catch {
-      // ignore
-    }
-    router.replace({ pathname: '/login' } as any);
-  }
 
   if (loading) return <ActivityIndicator style={{ flex: 1 }} />;
 
   const firstName = user?.name?.split(' ')[0] || 'User';
+
+  const getStatusColor = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return '#10B981';
+      case 'scheduled':
+        return '#3B82F6';
+      case 'missed':
+        return '#EF4444';
+      default:
+        return '#6B7280';
+    }
+  };
 
   return (
     <SafeAreaView style={styles.container}>
@@ -121,26 +157,48 @@ export default function Home() {
         </View>
 
         <View style={styles.timelineCard}>
-          <View style={styles.timelineItem}>
-            <Text style={styles.timelineTime}>8:00 AM</Text>
-            <Text style={styles.timelineActivity}>Water reminder (completed ✅)</Text>
-          </View>
-          
-          <View style={styles.timelineItem}>
-            <Text style={styles.timelineTime}>10:30 AM</Text>
-            <Text style={styles.timelineActivity}>Medicine dose (upcoming ⏳)</Text>
-          </View>
-          
-          <View style={styles.timelineItem}>
-            <Text style={styles.timelineTime}>12:00 PM</Text>
-            <Text style={styles.timelineActivity}>Hydration check (skipped ❌)</Text>
-          </View>
+          {timeline.length > 0 ? (
+            timeline.map((item, index) => (
+              <View key={item.id || index} style={styles.timelineItem}>
+                <View style={styles.timelineItemContent}>
+                  <View style={styles.timelineLeft}>
+                    <View style={[styles.timelineDot, { backgroundColor: getStatusColor(item.status) }]} />
+                    {index < timeline.length - 1 && <View style={styles.timelineLine} />}
+                  </View>
+                  <View style={styles.timelineRight}>
+                    <View style={styles.timelineHeader}>
+                      <Text style={styles.timelineTime}>{item.time || 'N/A'}</Text>
+                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
+                        <Text style={[styles.statusBadgeText, { color: getStatusColor(item.status) }]}>
+                          {item.status_emoji || '📋'} {item.status_text || item.status}
+                        </Text>
+                      </View>
+                    </View>
+                    <View style={styles.timelineActivityRow}>
+                      <Ionicons 
+                        name={item.type === 'medication' ? 'medical' : 'water'} 
+                        size={16} 
+                        color="#93C5FD" 
+                        style={styles.timelineIcon}
+                      />
+                      <Text style={styles.timelineActivity}>{item.title || 'Reminder'}</Text>
+                    </View>
+                    {item.body && (
+                      <Text style={styles.timelineBody}>{item.body}</Text>
+                    )}
+                  </View>
+                </View>
+              </View>
+            ))
+          ) : (
+            <View style={styles.timelineEmpty}>
+              <Ionicons name="calendar-outline" size={48} color="#93C5FD" style={styles.emptyIcon} />
+              <Text style={styles.timelineEmptyText}>No scheduled reminders for today</Text>
+              <Text style={styles.timelineEmptySubtext}>Your timeline will appear here when you have reminders</Text>
+            </View>
+          )}
         </View>
 
-        {/* Logout Button (temporary) */}
-        <TouchableOpacity style={styles.logoutButton} onPress={onLogout}>
-          <Text style={styles.logoutText}>Logout</Text>
-        </TouchableOpacity>
       </ScrollView>
 
       {/* Bottom Navigation */}
@@ -296,31 +354,98 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     padding: 20,
     marginBottom: 24,
+    minHeight: 100,
   },
   timelineItem: {
-    marginBottom: 16,
+    marginBottom: 20,
+  },
+  timelineItemContent: {
+    flexDirection: 'row',
+  },
+  timelineLeft: {
+    width: 30,
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: '#1E3A8A',
+    zIndex: 1,
+  },
+  timelineLine: {
+    position: 'absolute',
+    top: 12,
+    left: 5,
+    width: 2,
+    height: '100%',
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+  },
+  timelineRight: {
+    flex: 1,
+    paddingBottom: 4,
+  },
+  timelineHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
   },
   timelineTime: {
     color: '#93C5FD',
     fontSize: 14,
+    fontWeight: '700',
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+  },
+  statusBadgeText: {
+    fontSize: 11,
     fontWeight: '600',
+  },
+  timelineActivityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 4,
+  },
+  timelineIcon: {
+    marginRight: 8,
   },
   timelineActivity: {
     color: 'white',
-    fontSize: 14,
-    lineHeight: 20,
+    fontSize: 15,
+    fontWeight: '600',
+    flex: 1,
   },
-  logoutButton: {
-    backgroundColor: '#EF4444',
-    borderRadius: 12,
-    paddingVertical: 12,
+  timelineBody: {
+    color: 'rgba(255, 255, 255, 0.7)',
+    fontSize: 13,
+    marginTop: 2,
+    marginLeft: 24,
+  },
+  timelineEmpty: {
     alignItems: 'center',
-    marginBottom: 100,
+    justifyContent: 'center',
+    paddingVertical: 40,
   },
-  logoutText: {
+  emptyIcon: {
+    marginBottom: 16,
+    opacity: 0.6,
+  },
+  timelineEmptyText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '600',
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  timelineEmptySubtext: {
+    color: 'rgba(255, 255, 255, 0.6)',
+    fontSize: 13,
+    textAlign: 'center',
   },
 });

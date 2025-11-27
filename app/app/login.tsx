@@ -64,8 +64,12 @@ export default function Login() {
     setLoading(true);
     try {
       const res = await api.post('/login', { email, password });
-      // navigate to home, pass token
-      router.replace({ pathname: '/home', params: { token: res.token } } as any);
+      // Check if onboarding is needed
+      if (!res.onboarding_completed) {
+        router.replace({ pathname: '/onboarding', params: { token: res.token, name: res.user?.name || '' } } as any);
+      } else {
+        router.replace({ pathname: '/home', params: { token: res.token } } as any);
+      }
     } catch (err: any) {
       console.log('login error', err);
       const message = err?.data?.message || err?.data || err?.message || 'Login failed';
