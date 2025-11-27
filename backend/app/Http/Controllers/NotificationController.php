@@ -252,7 +252,7 @@ class NotificationController extends Controller
 
         // If it's a hydration reminder, schedule the next one
         if ($notification->type === 'hydration') {
-            $data = json_decode($notification->data, true);
+            $data = is_array($notification->data) ? $notification->data : json_decode($notification->data ?? '{}', true);
             $intervalMinutes = $data['interval_minutes'] ?? 120;
             
             $nextScheduledTime = Carbon::now()->addMinutes($intervalMinutes);
@@ -292,6 +292,50 @@ class NotificationController extends Controller
         return response()->json([
             'message' => 'Marked ' . $missedNotifications->count() . ' notifications as missed'
         ]);
+    }
+
+    /**
+     * Get today's timeline (notifications for today)
+     */
+    public function getTodayTimeline(Request $request)
+    {
+        $user = $request->user();
+        
+        $today = Carbon::today();
+        
+        $notifications = NotificationModel::where('user_id', $user->id)
+            ->whereDate('scheduled_time', $today)
+            ->orderBy('scheduled_time', 'asc')
+            ->get()
+            ->map(function ($notification) {
+                $statusEmoji = match($notification->status) {
+                    'completed' => '✅',
+                    'scheduled' => '⏳',
+                    'missed' => '❌',
+                    default => '📋',
+                };
+                
+                $statusText = match($notification->status) {
+                    'completed' => 'completed',
+                    'scheduled' => 'upcoming',
+                    'missed' => 'skipped',
+                    default => $notification->status,
+                };
+                
+                return [
+                    'id' => $notification->id,
+                    'time' => Carbon::parse($notification->scheduled_time)->format('g:i A'),
+                    'title' => $notification->title,
+                    'body' => $notification->body,
+                    'type' => $notification->type,
+                    'status' => $notification->status,
+                    'status_text' => $statusText,
+                    'status_emoji' => $statusEmoji,
+                    'scheduled_time' => $notification->scheduled_time,
+                ];
+            });
+
+        return response()->json($notifications);
     }
 
     /**

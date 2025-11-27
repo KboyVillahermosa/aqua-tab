@@ -8,6 +8,9 @@ use App\Models\User;
 Route::post('register', [AuthController::class, 'register']);
 Route::post('login', [AuthController::class, 'login']);
 
+// Public subscription plans endpoint
+Route::get('subscription/plans', [App\Http\Controllers\SubscriptionController::class, 'plans']);
+
 // Admin endpoints (no auth required for admin panel)
 Route::get('hydration/stats', [App\Http\Controllers\HydrationController::class, 'stats']);
 Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getAdminStats']);
@@ -18,6 +21,11 @@ Route::get('admin/dashboard-stats', [App\Http\Controllers\AdminController::class
 Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
+    
+    // Onboarding endpoints
+    Route::get('onboarding/status', [App\Http\Controllers\OnboardingController::class, 'status']);
+    Route::put('onboarding/update', [App\Http\Controllers\OnboardingController::class, 'update']);
+    Route::post('onboarding/complete', [App\Http\Controllers\OnboardingController::class, 'complete']);
     // Medication endpoints
     Route::get('medications', [App\Http\Controllers\MedicationController::class, 'index']);
     Route::post('medications', [App\Http\Controllers\MedicationController::class, 'store']);
@@ -37,6 +45,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
 
         // Notification endpoints
         Route::get('notifications', [App\Http\Controllers\NotificationController::class, 'index']);
+        Route::get('notifications/today-timeline', [App\Http\Controllers\NotificationController::class, 'getTodayTimeline']);
         Route::post('notifications', [App\Http\Controllers\NotificationController::class, 'store']);
         Route::put('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'update']);
         Route::delete('notifications/{notification}', [App\Http\Controllers\NotificationController::class, 'destroy']);
@@ -46,6 +55,12 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
         Route::post('notifications/{notification}/complete', [App\Http\Controllers\NotificationController::class, 'complete']);
     Route::post('notifications/mark-missed', [App\Http\Controllers\NotificationController::class, 'markMissedNotifications']);
     
+    // Subscription endpoints
+    Route::get('subscription/current', [App\Http\Controllers\SubscriptionController::class, 'current']);
+    Route::post('subscription/subscribe', [App\Http\Controllers\SubscriptionController::class, 'subscribe']);
+    Route::post('subscription/cancel', [App\Http\Controllers\SubscriptionController::class, 'cancel']);
+    Route::get('subscription/history', [App\Http\Controllers\SubscriptionController::class, 'history']);
+    Route::get('subscription/check-feature/{feature}', [App\Http\Controllers\SubscriptionController::class, 'checkFeature']);
 });
 
 // If the app doesn't have the middleware registered, add a fallback route to demonstrate

@@ -70,9 +70,9 @@ export default function Profile() {
     {
       id: 1,
       title: 'Personal Information',
-      subtitle: 'Edit your personal details',
+      subtitle: 'View your profile details',
       icon: 'person-outline',
-      action: () => console.log('Edit personal info')
+      action: () => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)
     },
     {
       id: 2,
@@ -97,6 +97,13 @@ export default function Profile() {
     },
     {
       id: 5,
+      title: 'Premium Subscription',
+      subtitle: 'Unlock more features',
+      icon: 'star-outline',
+      action: () => router.push({ pathname: '/components/pages/subscription/Subscription', params: { token } } as any)
+    },
+    {
+      id: 6,
       title: 'Help & Support',
       subtitle: 'Get help and contact support',
       icon: 'help-circle-outline',
@@ -176,15 +183,30 @@ export default function Profile() {
           <View style={styles.infoCard}>
             <Ionicons name="call-outline" size={20} color="#1E3A8A" />
             <Text style={styles.infoLabel}>Phone</Text>
-            <Text style={styles.infoValue}>{user.phone}</Text>
+            <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
           </View>
           
           <View style={styles.infoCard}>
-            <Ionicons name="water-outline" size={20} color="#1E3A8A" />
-            <Text style={styles.infoLabel}>Blood Type</Text>
-            <Text style={styles.infoValue}>{user.bloodType}</Text>
+            <Ionicons name="calendar-outline" size={20} color="#1E3A8A" />
+            <Text style={styles.infoLabel}>Date of Birth</Text>
+            <Text style={styles.infoValue}>{user.dateOfBirth || 'Not set'}</Text>
           </View>
         </View>
+
+        {/* Onboarding Data Preview */}
+        <TouchableOpacity 
+          style={styles.onboardingCard}
+          onPress={() => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)}
+        >
+          <View style={styles.onboardingHeader}>
+            <Ionicons name="information-circle-outline" size={24} color="#1E3A8A" />
+            <Text style={styles.onboardingTitle}>View Complete Profile Details</Text>
+            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+          </View>
+          <Text style={styles.onboardingSubtitle}>
+            See all your health information, daily routine, and app settings
+          </Text>
+        </TouchableOpacity>
 
         {/* Profile Options */}
         <View style={styles.optionsContainer}>
@@ -220,7 +242,23 @@ export default function Profile() {
         </View>
 
         {/* Logout Button */}
-        <TouchableOpacity style={styles.logoutButton}>
+        <TouchableOpacity 
+          style={styles.logoutButton}
+          onPress={async () => {
+            try {
+              await fetch('http://10.0.2.2:8000/api/logout', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+            } catch (err) {
+              console.log('Logout error:', err);
+            }
+            router.replace({ pathname: '/login' } as any);
+          }}
+        >
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
           <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>
@@ -466,6 +504,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#EF4444',
     marginLeft: 8,
+  },
+  onboardingCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    borderLeftWidth: 4,
+    borderLeftColor: '#1E3A8A',
+  },
+  onboardingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  onboardingTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginLeft: 12,
+  },
+  onboardingSubtitle: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginLeft: 36,
+    lineHeight: 20,
   },
   loadingContainer: {
     flex: 1,
