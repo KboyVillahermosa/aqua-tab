@@ -165,6 +165,18 @@ export default function Subscription() {
       </View>
 
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+        {/* Premium Description Section */}
+        <View style={styles.descriptionSection}>
+          <View style={styles.descriptionCard}>
+            <Ionicons name="star" size={32} color="#F59E0B" />
+            <Text style={styles.descriptionTitle}>Unlock Premium Features</Text>
+            <Text style={styles.descriptionText}>
+              Get the most out of AquaTab with our Premium subscription. Track unlimited medications, 
+              export your data, receive smart insights, and enjoy priority support.
+            </Text>
+          </View>
+        </View>
+
         {currentSubscription?.is_active && currentSubscription.plan && (
           <View style={styles.currentPlanCard}>
             <Text style={styles.currentPlanTitle}>Current Plan</Text>
@@ -285,6 +297,37 @@ const styles = StyleSheet.create({
   scrollView: {
     flex: 1,
     backgroundColor: '#F8F9FA',
+  },
+  descriptionSection: {
+    padding: 20,
+    paddingBottom: 10,
+  },
+  descriptionCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
+    borderLeftWidth: 4,
+    borderLeftColor: '#1E3A8A',
+  },
+  descriptionTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 12,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  descriptionText: {
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 22,
+    textAlign: 'center',
   },
   currentPlanCard: {
     backgroundColor: '#10B981',

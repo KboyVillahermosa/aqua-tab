@@ -27,6 +27,7 @@ class User extends Authenticatable
         'date_of_birth',
         'gender',
         'address',
+        'emergency_contact',
         'current_subscription_plan_id',
         'subscription_expires_at',
         'onboarding_completed',
@@ -45,6 +46,7 @@ class User extends Authenticatable
         'reminder_tone',
         'notification_permissions_accepted',
         'battery_optimization_set',
+        'hydration_goal',
     ];
 
     /**

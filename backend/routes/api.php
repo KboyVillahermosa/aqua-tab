@@ -30,11 +30,19 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::get('medications', [App\Http\Controllers\MedicationController::class, 'index']);
     Route::post('medications', [App\Http\Controllers\MedicationController::class, 'store']);
     Route::get('medications/upcoming', [App\Http\Controllers\MedicationController::class, 'getUpcoming']);
+    Route::get('medications/stats', [App\Http\Controllers\MedicationController::class, 'getStats']);
     Route::get('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'show']);
     Route::put('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'update']);
     Route::delete('medications/{medication}', [App\Http\Controllers\MedicationController::class, 'destroy']);
     Route::post('medications/{medication}/history', [App\Http\Controllers\MedicationController::class, 'addHistory']);
     Route::get('medications/{medication}/history', [App\Http\Controllers\MedicationController::class, 'history']);
+    Route::get('medications/export/csv', [App\Http\Controllers\MedicationController::class, 'exportCsv']);
+    Route::get('medications/export/pdf', [App\Http\Controllers\MedicationController::class, 'exportPdf']);
+
+    // Smart Insights endpoints (Premium)
+    Route::get('insights/weekly-report', [App\Http\Controllers\InsightController::class, 'weeklyReportCard']);
+    Route::get('insights/patterns', [App\Http\Controllers\InsightController::class, 'patternDetection']);
+    Route::get('insights/snooze-analysis', [App\Http\Controllers\InsightController::class, 'snoozeAnalysis']);
 
         // Hydration endpoints
         Route::get('hydration', [App\Http\Controllers\HydrationController::class, 'index']);

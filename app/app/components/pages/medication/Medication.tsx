@@ -1,11 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, Linking } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-// import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
+import { notificationService } from '../../../services/notificationService';
+import PremiumLockModal from '../../PremiumLockModal';
 
 type MedicationItem = {
   id: string;
@@ -46,6 +47,9 @@ export default function Medication() {
   const [stats, setStats] = useState<any>(null);
   const [upcoming, setUpcoming] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [subscription, setSubscription] = useState<any>(null);
+  const [premiumLockVisible, setPremiumLockVisible] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   // form state
   const [name, setName] = useState('');
@@ -102,9 +106,21 @@ export default function Medication() {
           // Load stats and upcoming medications
           try {
             const statsData = await api.get('/medications/stats', token as string);
-            setStats(statsData);
+            setStats(statsData || {
+              total_medications: 0,
+              active_medications: 0,
+              completed_today: 0,
+              missed_today: 0
+            });
           } catch (e) {
             console.log('Failed to load stats:', e);
+            // Initialize with zeros if stats fail to load
+            setStats({
+              total_medications: 0,
+              active_medications: 0,
+              completed_today: 0,
+              missed_today: 0
+            });
           }
 
           try {
@@ -112,6 +128,14 @@ export default function Medication() {
             setUpcoming(upcomingData || []);
           } catch (e) {
             console.log('Failed to load upcoming:', e);
+          }
+
+          // Load subscription status
+          try {
+            const subscriptionData = await api.get('/subscription/current', token as string);
+            setSubscription(subscriptionData);
+          } catch (subErr) {
+            console.log('Error loading subscription:', subErr);
           }
         } else {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
@@ -134,6 +158,43 @@ export default function Medication() {
   useEffect(() => {
     AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history)).catch((e: any) => console.log(e));
   }, [history]);
+
+  // Auto-mark missed medications and reload stats periodically
+  useEffect(() => {
+    if (!token || meds.length === 0) return;
+
+    const checkAndReload = async () => {
+      try {
+        // Reload stats which will auto-mark missed medications on backend
+        const statsData = await api.get('/medications/stats', token as string);
+        setStats(statsData);
+        
+        // Reload history to get any new missed entries
+        const allHistory: HistoryEntry[] = [];
+        for (const m of meds) {
+          try {
+            const h = await api.get(`/medications/${m.id}/history`, token as string);
+            (h || []).forEach((hh:any) => {
+              allHistory.push({ id: hh.id?.toString() || uid(), medId: m.id.toString(), time: hh.time, status: hh.status });
+            });
+          } catch {
+            // ignore per-med history errors
+          }
+        }
+        setHistory(allHistory);
+      } catch (e) {
+        console.log('Failed to reload stats/history:', e);
+      }
+    };
+
+    // Check immediately
+    checkAndReload();
+
+    // Check every 5 minutes
+    const interval = setInterval(checkAndReload, 5 * 60 * 1000);
+
+    return () => clearInterval(interval);
+  }, [token, meds]);
 
   function openAdd() {
     console.log('Medication: openAdd called');
@@ -216,8 +277,28 @@ export default function Medication() {
   }
 
   async function scheduleMedicationReminders(medication: MedicationItem) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Medication reminder scheduling temporarily disabled');
+    if (!token || !medication.reminder) {
+      // If reminder is disabled, cancel existing notifications
+      if (medication.id) {
+        await notificationService.cancelMedicationNotifications(medication.id);
+      }
+      return;
+    }
+
+    try {
+      notificationService.setToken(token as string);
+      
+      // Schedule notifications for each time
+      await notificationService.scheduleMedicationNotifications(
+        medication.id,
+        medication.name,
+        medication.dosage,
+        medication.times,
+        medication.id // Use medication ID as backend notification ID for now
+      );
+    } catch (error) {
+      console.error('Error scheduling medication reminders:', error);
+    }
   }
 
   async function deleteMedication(id: string) {
@@ -237,8 +318,13 @@ export default function Medication() {
           return;
         }
         if (token) {
+          // Cancel notifications for this medication
+          await notificationService.cancelMedicationNotifications(id);
           // attempt server delete and keep UI in sync; encapsulated in helper
           await performServerDelete(id, previous, newMeds);
+        } else {
+          // Cancel notifications even if no token
+          await notificationService.cancelMedicationNotifications(id);
         }
       } },
     ]);
@@ -284,14 +370,98 @@ export default function Medication() {
   }
 
   async function markTaken(medId: string, timeIso?: string) {
-    const entry: HistoryEntry = { id: uid(), medId, time: timeIso || new Date().toISOString(), status: 'completed' };
+    const med = meds.find(m => m.id === medId);
+    if (!med) return;
+
+    // Determine the scheduled time for this medication
+    let scheduledTime = timeIso;
+    if (!scheduledTime) {
+      // Find the next scheduled time that hasn't passed yet, or use the closest one
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      
+      // Find the scheduled time for today that's closest to now (or just passed)
+      const scheduledTimes = (med.times || []).map(t => {
+        const timeDate = new Date(t);
+        const todayTime = new Date(today);
+        todayTime.setHours(timeDate.getHours(), timeDate.getMinutes(), timeDate.getSeconds());
+        
+        // If time has passed today, use it (for marking as taken)
+        if (todayTime <= now) {
+          return todayTime.toISOString();
+        }
+        // Otherwise, use yesterday's time if we're marking it late
+        return new Date(todayTime.getTime() - 24 * 60 * 60 * 1000).toISOString();
+      });
+      
+      // Use the most recent scheduled time
+      scheduledTime = scheduledTimes.length > 0 
+        ? scheduledTimes.sort((a, b) => new Date(b).getTime() - new Date(a).getTime())[0]
+        : new Date().toISOString();
+    }
+
+    // Check if an entry already exists for this medication and scheduled time
+    // We'll match entries within a 2-hour window of the scheduled time to prevent duplicates
+    const scheduledTimeDate = new Date(scheduledTime);
+    const twoHoursBefore = new Date(scheduledTimeDate.getTime() - 2 * 60 * 60 * 1000);
+    const twoHoursAfter = new Date(scheduledTimeDate.getTime() + 2 * 60 * 60 * 1000);
+    
+    const existingEntry = history.find(h => {
+      if (h.medId !== medId) return false;
+      const entryTime = new Date(h.time);
+      return entryTime >= twoHoursBefore && entryTime <= twoHoursAfter && h.status === 'completed';
+    });
+
+    if (existingEntry) {
+      Alert.alert('Already Logged', 'This medication has already been marked as taken for this scheduled time.');
+      return;
+    }
+
+    const entry: HistoryEntry = { id: uid(), medId, time: scheduledTime, status: 'completed' };
     setHistory((h) => [entry, ...h]);
     
     // Cancel any pending notifications for this medication (temporarily disabled)
     console.log('Notification cancellation temporarily disabled');
     
     if (token) {
-      await api.post(`/medications/${medId}/history`, { status: 'completed', time: entry.time }, token as string).catch(()=>{});
+      try {
+        const response = await api.post(`/medications/${medId}/history`, { status: 'completed', time: entry.time }, token as string);
+        // If response indicates it was updated (not created), reload history
+        if (response && response.id) {
+          // Reload history to get updated entry
+          const allHistory: HistoryEntry[] = [];
+          for (const m of meds) {
+            try {
+              const h = await api.get(`/medications/${m.id}/history`, token as string);
+              (h || []).forEach((hh:any) => {
+                allHistory.push({ id: hh.id?.toString() || uid(), medId: m.id.toString(), time: hh.time, status: hh.status });
+              });
+            } catch {
+              // ignore per-med history errors
+            }
+          }
+          setHistory(allHistory);
+        }
+        // Reload stats after marking as taken
+        try {
+          const statsData = await api.get('/medications/stats', token as string);
+          setStats(statsData);
+        } catch (e) {
+          console.log('Failed to reload stats:', e);
+        }
+      } catch (err: any) {
+        console.log('Error marking medication as taken:', err);
+        if (err?.status === 409) {
+          // Duplicate entry
+          Alert.alert('Already Logged', err?.data?.message || 'This medication has already been logged for this scheduled time.');
+          // Remove from local state
+          setHistory((h) => h.filter(e => e.id !== entry.id));
+        } else {
+          Alert.alert('Error', 'Failed to save medication history. Please try again.');
+          // Remove from local state if server save failed
+          setHistory((h) => h.filter(e => e.id !== entry.id));
+        }
+      }
     }
   }
 
@@ -335,6 +505,93 @@ export default function Medication() {
     return med.color || '#1E3A8A';
   }
 
+  async function handleExport() {
+    if (!token) return;
+
+    // Check if user has premium
+    const hasPremium = subscription?.plan_slug === 'premium' || subscription?.plan?.data_export === true;
+    
+    if (!hasPremium) {
+      setPremiumLockVisible(true);
+      return;
+    }
+
+    Alert.alert(
+      'Export Medication History',
+      'Choose export format:',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Export as CSV',
+          onPress: async () => {
+            try {
+              setExporting(true);
+              const baseUrl = 'http://10.0.2.2:8000'; // Adjust for your backend URL
+              const url = `${baseUrl}/api/medications/export/csv`;
+              const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+
+              if (response.ok) {
+                const blob = await response.blob();
+                // For React Native, you'd use a library like react-native-fs or expo-file-system
+                // For now, we'll show a success message
+                Alert.alert('Success', 'CSV export started. Check your downloads folder.');
+              } else {
+                const error = await response.json();
+                if (error.requires_premium) {
+                  setPremiumLockVisible(true);
+                } else {
+                  Alert.alert('Error', 'Failed to export CSV');
+                }
+              }
+            } catch (err) {
+              console.error('Export error:', err);
+              Alert.alert('Error', 'Failed to export medication history');
+            } finally {
+              setExporting(false);
+            }
+          },
+        },
+        {
+          text: 'Export as PDF',
+          onPress: async () => {
+            try {
+              setExporting(true);
+              const baseUrl = 'http://10.0.2.2:8000';
+              const url = `${baseUrl}/api/medications/export/pdf`;
+              const response = await fetch(url, {
+                method: 'GET',
+                headers: {
+                  'Authorization': `Bearer ${token}`,
+                },
+              });
+
+              if (response.ok) {
+                Alert.alert('Success', 'PDF export started. Check your downloads folder.');
+              } else {
+                const error = await response.json();
+                if (error.requires_premium) {
+                  setPremiumLockVisible(true);
+                } else {
+                  Alert.alert('Error', 'Failed to export PDF');
+                }
+              }
+            } catch (err) {
+              console.error('Export error:', err);
+              Alert.alert('Error', 'Failed to export medication history');
+            } finally {
+              setExporting(false);
+            }
+          },
+        },
+      ]
+    );
+  }
+
   function formatTimeUntilNext(nextTime: string) {
     const now = new Date();
     const next = new Date(nextTime);
@@ -371,31 +628,41 @@ export default function Medication() {
       >
         {/* Header */}
         <View style={styles.headerSection}>
-          <Text style={styles.headerTitle}>Medications</Text>
-          <Text style={styles.headerSubtitle}>Manage your medication schedule</Text>
+          <View style={styles.headerTop}>
+            <View>
+              <Text style={styles.headerTitle}>Medications</Text>
+              <Text style={styles.headerSubtitle}>Manage your medication schedule</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.exportButton}
+              onPress={handleExport}
+              disabled={exporting}
+            >
+              <Ionicons name="download-outline" size={20} color="#1E3A8A" />
+              <Text style={styles.exportButtonText}>Export</Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Stats Dashboard */}
-        {stats && (
-          <View style={styles.statsContainer}>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.total_medications}</Text>
-              <Text style={styles.statLabel}>Total</Text>
-      </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.active_medications}</Text>
-              <Text style={styles.statLabel}>Active</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.completed_today}</Text>
-              <Text style={styles.statLabel}>Today</Text>
-            </View>
-            <View style={styles.statCard}>
-              <Text style={styles.statNumber}>{stats.missed_today}</Text>
-              <Text style={styles.statLabel}>Missed</Text>
-            </View>
+        <View style={styles.statsContainer}>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats?.total_medications ?? 0}</Text>
+            <Text style={styles.statLabel}>Total</Text>
           </View>
-        )}
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats?.active_medications ?? 0}</Text>
+            <Text style={styles.statLabel}>Active</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats?.completed_today ?? 0}</Text>
+            <Text style={styles.statLabel}>Today</Text>
+          </View>
+          <View style={styles.statCard}>
+            <Text style={styles.statNumber}>{stats?.missed_today ?? 0}</Text>
+            <Text style={styles.statLabel}>Missed</Text>
+          </View>
+        </View>
 
         {/* Upcoming Medications */}
         {upcoming.length > 0 && (
@@ -960,6 +1227,14 @@ export default function Medication() {
         </View>
       </Modal>
 
+      {/* Premium Lock Modal */}
+      <PremiumLockModal
+        visible={premiumLockVisible}
+        onClose={() => setPremiumLockVisible(false)}
+        featureName="Data Export"
+        token={token as string}
+      />
+
     </SafeAreaView>
   );
 }
@@ -973,8 +1248,28 @@ const styles = StyleSheet.create({
   
   // Header
   headerSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
+  headerTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
   headerTitle: { fontSize: 28, fontWeight: '700', color: '#1F2937' },
   headerSubtitle: { fontSize: 16, color: '#6B7280', marginTop: 4 },
+  exportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 12,
+    gap: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  exportButtonText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E3A8A',
+  },
   
   // Stats Dashboard
   statsContainer: { 

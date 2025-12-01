@@ -1,17 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
-// import * as Notifications from 'expo-notifications';
+import { notificationService } from '../../../services/notificationService';
 
 // ProgressBar removed (unused) — visual progress is handled inline with animated circle
 
 export default function Hydration() {
   const { token } = useLocalSearchParams();
   const [goal, setGoal] = useState<number>(2000);
+  const [idealGoal, setIdealGoal] = useState<number | null>(null);
   const [entries, setEntries] = useState<any[]>([]);
   const [amountInput, setAmountInput] = useState('');
   const [loading, setLoading] = useState(true);
@@ -21,6 +22,7 @@ export default function Hydration() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [calendarData, setCalendarData] = useState<any[]>([]);
+  const [showIdealGoalAlert, setShowIdealGoalAlert] = useState(false);
   const anim = useRef(new Animated.Value(0)).current;
 
   const fmt = (n:number) => {
@@ -95,9 +97,18 @@ export default function Hydration() {
           const res = await api.get('/hydration', token as string);
           if (res) {
             setGoal(res.goal ?? 2000);
+            setIdealGoal(res.ideal_goal ?? null);
             setEntries(res.entries ?? []);
             setMissedCount((res.missed || []).length || 0);
             await AsyncStorage.setItem('hydration', JSON.stringify(res));
+            
+            // Show ideal goal popup if it's different from current goal and user hasn't set a custom goal
+            if (res.ideal_goal && res.ideal_goal !== res.goal && res.goal === 2000) {
+              // Only show if goal is still at default
+              setTimeout(() => {
+                setShowIdealGoalAlert(true);
+              }, 500);
+            }
           }
         }
       } catch (err:any) {
@@ -174,8 +185,19 @@ export default function Hydration() {
   }
 
   async function scheduleHydrationReminder() {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Hydration reminder scheduling temporarily disabled');
+    if (!token) return;
+
+    try {
+      notificationService.setToken(token as string);
+      
+      // Schedule next reminder based on interval (default 2 hours = 120 minutes)
+      const intervalMinutes = 120; // Could be made configurable from user settings
+      const amountMl = Math.round(goal / 8); // Suggest 1/8th of daily goal per reminder
+      
+      await notificationService.scheduleHydrationReminder(intervalMinutes, amountMl);
+    } catch (error) {
+      console.error('Error scheduling hydration reminder:', error);
+    }
   }
 
   async function submitCustom() {
@@ -186,27 +208,40 @@ export default function Hydration() {
   }
 
   async function changeGoal() {
+    const message = idealGoal && idealGoal !== goal 
+      ? `Set your daily water intake goal in milliliters\n\nBased on your profile, your ideal hydration goal is ${idealGoal} ml.\n\nCurrent goal: ${goal} ml`
+      : 'Set your daily water intake goal in milliliters\n\nRecommended: 2000-3000ml for adults';
+    
+    const buttons: any[] = [
+      { text: 'Cancel', style: 'cancel' as const },
+      { text: 'Quick Set', onPress: () => {
+        Alert.alert('Quick Goal Set', 'Choose a preset goal', [
+          { text: '1500ml', onPress: () => updateGoal(1500) },
+          { text: '2000ml', onPress: () => updateGoal(2000) },
+          { text: '2500ml', onPress: () => updateGoal(2500) },
+          { text: '3000ml', onPress: () => updateGoal(3000) },
+          { text: 'Cancel', style: 'cancel' }
+        ]);
+      }},
+      { text: 'Custom', onPress: async (text:any) => {
+        const v = parseInt(text || '0', 10);
+        if (!v || v <= 0) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
+        if (v < 1000 || v > 5000) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
+        await updateGoal(v);
+      }}
+    ];
+    
+    if (idealGoal && idealGoal !== goal) {
+      buttons.splice(1, 0, {
+        text: `Use Ideal (${idealGoal}ml)`, 
+        onPress: () => updateGoal(idealGoal)
+      });
+    }
+    
     Alert.prompt(
       'Daily Hydration Goal', 
-      'Set your daily water intake goal in milliliters\n\nRecommended: 2000-3000ml for adults', 
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { text: 'Quick Set', onPress: () => {
-          Alert.alert('Quick Goal Set', 'Choose a preset goal', [
-            { text: '1500ml', onPress: () => updateGoal(1500) },
-            { text: '2000ml', onPress: () => updateGoal(2000) },
-            { text: '2500ml', onPress: () => updateGoal(2500) },
-            { text: '3000ml', onPress: () => updateGoal(3000) },
-            { text: 'Cancel', style: 'cancel' }
-          ]);
-        }},
-        { text: 'Custom', onPress: async (text:any) => {
-          const v = parseInt(text || '0', 10);
-          if (!v || v <= 0) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
-          if (v < 1000 || v > 5000) return Alert.alert('Invalid', 'Goal must be between 1000-5000ml');
-          await updateGoal(v);
-        }}
-      ], 
+      message,
+      buttons, 
       'plain-text', 
       String(goal)
     );
@@ -310,7 +345,9 @@ export default function Hydration() {
               <View style={styles.missedIconPlaceholder} />
               <Text style={styles.missedLabelAlt}>Missed</Text>
               <Text style={styles.missedNumberAlt}>{missedCount}</Text>
-              <TouchableOpacity onPress={logMissed}><Text style={styles.logMissedTextAlt}>Log missed</Text></TouchableOpacity>
+              <TouchableOpacity onPress={logMissed} style={styles.logMissedButton}>
+                <Text style={styles.logMissedTextAlt}>Log Missed</Text>
+              </TouchableOpacity>
             </View>
           </View>
         </View>
@@ -406,10 +443,10 @@ export default function Hydration() {
                     </Text>
                     
                     {day.amount > 0 && (
-                      <View style={styles.hydrationIndicator}>
+                      <View style={[styles.hydrationIndicator, { backgroundColor: hydrationLevel.color + '20' }]}>
                         <Ionicons 
                           name={hydrationLevel.icon as any} 
-                          size={12} 
+                          size={16} 
                           color={hydrationLevel.color} 
                         />
                       </View>
@@ -470,6 +507,46 @@ export default function Hydration() {
       </ScrollView>
 
       <BottomNavigation currentRoute="hydration" />
+
+      {/* Ideal Goal Alert Modal */}
+      <Modal
+        visible={showIdealGoalAlert && idealGoal !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowIdealGoalAlert(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Recommended Hydration Goal</Text>
+            <Text style={styles.modalMessage}>
+              Based on your profile (weight, age, climate, exercise), your ideal daily hydration goal is:
+            </Text>
+            <Text style={styles.modalGoalValue}>{idealGoal} ml</Text>
+            <Text style={styles.modalSubtext}>
+              This is calculated based on your personal information to help you stay optimally hydrated.
+            </Text>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity 
+                style={styles.modalButtonSecondary}
+                onPress={() => {
+                  setShowIdealGoalAlert(false);
+                }}
+              >
+                <Text style={styles.modalButtonSecondaryText}>Keep Current ({goal} ml)</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalButtonPrimary}
+                onPress={async () => {
+                  setShowIdealGoalAlert(false);
+                  await updateGoal(idealGoal!);
+                }}
+              >
+                <Text style={styles.modalButtonPrimaryText}>Use Recommended</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -538,7 +615,8 @@ const styles = StyleSheet.create({
   missedCardAlt: { backgroundColor: '#FEF7E7', padding: 20, borderRadius: 14, width: 150, alignItems: 'center', justifyContent: 'center', shadowColor:'#000', shadowOpacity:0.02, shadowRadius:6, elevation:2 },
   missedLabelAlt: { fontSize: 12, color: '#92400E', marginBottom: 8, fontWeight: '700' },
   missedNumberAlt: { fontSize: 36, fontWeight: '900', color: '#92400E', marginBottom: 6 },
-  logMissedTextAlt: { marginTop: 6, color: '#92400E', fontWeight: '800' },
+  logMissedButton: { marginTop: 8, backgroundColor: '#F59E0B', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4, elevation: 4 },
+  logMissedTextAlt: { color: '#FFFFFF', fontWeight: '900', fontSize: 14, textTransform: 'uppercase', letterSpacing: 0.5 },
 
   cardAlt: { backgroundColor:'white', borderRadius:12, padding:14, marginBottom:16 },
   quickAddTitle: { fontSize:16, fontWeight:'700', color:'#0F172A', marginBottom:12 },
@@ -568,7 +646,7 @@ const styles = StyleSheet.create({
   calendarDayTextOtherMonth: { color:'#9CA3AF' },
   calendarDayTextToday: { color:'#1D4ED8', fontWeight:'700' },
   calendarDayTextSelected: { color:'white', fontWeight:'700' },
-  hydrationIndicator: { position:'absolute', top:2, right:2 },
+  hydrationIndicator: { position:'absolute', top:2, right:2, padding: 2, borderRadius: 8, borderWidth: 1.5 },
   dayAmount: { fontSize:8, color:'#6B7280', fontWeight:'500', marginTop:2 },
   selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:16, marginTop:8 },
   selectedDayTitle: { fontSize:16, fontWeight:'600', color:'#1F2937', marginBottom:12 },
@@ -603,4 +681,16 @@ const styles = StyleSheet.create({
   motivationalText: { marginTop: 8, color: '#374151', fontSize: 12, fontWeight: '600', textAlign: 'center' },
   progressCardRight: { width: 150, alignItems: 'center', justifyContent: 'center' },
   missedIconPlaceholder: { width: 28, height: 28, borderRadius: 8, backgroundColor: '#FFF4E6', marginBottom: 8 },
+  // Modal styles
+  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.5)', justifyContent: 'center', alignItems: 'center', zIndex: 1000 },
+  modalContent: { backgroundColor: 'white', borderRadius: 20, padding: 24, marginHorizontal: 20, maxWidth: 400, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.3, shadowRadius: 8, elevation: 10 },
+  modalTitle: { fontSize: 22, fontWeight: '700', color: '#1F2937', marginBottom: 12, textAlign: 'center' },
+  modalMessage: { fontSize: 15, color: '#6B7280', marginBottom: 16, textAlign: 'center', lineHeight: 22 },
+  modalGoalValue: { fontSize: 32, fontWeight: '900', color: '#1E3A8A', textAlign: 'center', marginBottom: 12 },
+  modalSubtext: { fontSize: 13, color: '#9CA3AF', marginBottom: 24, textAlign: 'center', lineHeight: 18 },
+  modalButtons: { flexDirection: 'row', gap: 12 },
+  modalButtonSecondary: { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#F3F4F6', borderWidth: 1, borderColor: '#E5E7EB' },
+  modalButtonSecondaryText: { color: '#6B7280', fontWeight: '600', textAlign: 'center', fontSize: 14 },
+  modalButtonPrimary: { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#1E3A8A', shadowColor: '#1E3A8A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 },
+  modalButtonPrimaryText: { color: '#FFFFFF', fontWeight: '700', textAlign: 'center', fontSize: 14 },
 });

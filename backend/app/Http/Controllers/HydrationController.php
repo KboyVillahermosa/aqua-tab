@@ -9,6 +9,7 @@ use DateTime;
 use DateInterval;
 // optional DB model
 use App\Models\HydrationEntry;
+use App\Models\User;
 
 class HydrationController
 {
@@ -39,6 +40,71 @@ class HydrationController
         Storage::put($path, json_encode($data, JSON_PRETTY_PRINT));
     }
 
+    /**
+     * Calculate ideal hydration goal based on user profile
+     * Formula: Base (weight-based) + Age adjustment + Climate adjustment + Exercise adjustment
+     */
+    protected function calculateIdealGoal($user)
+    {
+        $baseGoal = 2000; // Default base goal in ml
+        
+        // Weight-based calculation (30-35ml per kg)
+        if ($user->weight) {
+            $weightKg = $user->weight;
+            if ($user->weight_unit === 'lbs') {
+                $weightKg = $user->weight * 0.453592; // Convert lbs to kg
+            }
+            $baseGoal = $weightKg * 33; // 33ml per kg is a good average
+        }
+        
+        // Age adjustment (older adults need slightly more, but not too much)
+        if ($user->age) {
+            if ($user->age >= 65) {
+                $baseGoal += 200; // Older adults may need slightly more
+            } elseif ($user->age < 18) {
+                $baseGoal *= 0.85; // Children need less
+            }
+        }
+        
+        // Climate adjustment
+        if ($user->climate) {
+            switch ($user->climate) {
+                case 'hot':
+                    $baseGoal += 500; // Hot climate needs more hydration
+                    break;
+                case 'cold':
+                    $baseGoal += 100; // Cold climate needs slightly more
+                    break;
+                case 'temperate':
+                default:
+                    // No adjustment for temperate
+                    break;
+            }
+        }
+        
+        // Exercise frequency adjustment
+        if ($user->exercise_frequency) {
+            switch ($user->exercise_frequency) {
+                case 'often':
+                    $baseGoal += 600; // Very active people need significantly more
+                    break;
+                case 'regularly':
+                    $baseGoal += 400; // Regular exercisers need more
+                    break;
+                case 'sometimes':
+                    $baseGoal += 200; // Occasional exercisers need a bit more
+                    break;
+                case 'rarely':
+                default:
+                    // No adjustment for sedentary lifestyle
+                    break;
+            }
+        }
+        
+        // Round to nearest 50ml for cleaner numbers
+        return round($baseGoal / 50) * 50;
+    }
+
     // GET /api/hydration
     public function index(Request $request)
     {
@@ -47,7 +113,26 @@ class HydrationController
             return response()->json(['message' => 'Unauthorized'], 401);
         }
         
-        // If DB model exists, prefer DB for current day's entries and goal stored in file
+        // Refresh user data to get latest profile info
+        $user->refresh();
+        
+        // Calculate ideal goal based on user profile
+        $idealGoal = $this->calculateIdealGoal($user);
+        
+        // Get current goal from database, fallback to file, then ideal goal
+        $goal = $user->hydration_goal ?? null;
+        if (!$goal) {
+            $file = $this->readData($user->id);
+            $goal = $file['goal'] ?? $idealGoal;
+            // If no goal set, use ideal and save it
+            if (!isset($file['goal']) || $file['goal'] == 2000) {
+                $user->hydration_goal = $idealGoal;
+                $user->save();
+                $goal = $idealGoal;
+            }
+        }
+        
+        // If DB model exists, prefer DB for current day's entries
         if (class_exists(HydrationEntry::class)) {
             $today = date('Y-m-d');
             $entries = HydrationEntry::where('user_id', $user->id)
@@ -66,11 +151,11 @@ class HydrationController
             
             // Calculate today's total
             $todayTotal = array_sum(array_column($entries, 'amount_ml'));
-            $goal = $file['goal'] ?? 2000;
             $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
             
             return response()->json([
-                'goal' => $goal, 
+                'goal' => $goal,
+                'ideal_goal' => $idealGoal,
                 'entries' => $entries, 
                 'missed' => $file['missed'] ?? [],
                 'today_total' => $todayTotal,
@@ -85,9 +170,10 @@ class HydrationController
             return strpos($entry['timestamp'] ?? '', $today) === 0;
         });
         $todayTotal = array_sum(array_column($todayEntries, 'amount_ml'));
-        $goal = $data['goal'] ?? 2000;
         $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
         
+        $data['goal'] = $goal;
+        $data['ideal_goal'] = $idealGoal;
         $data['today_total'] = $todayTotal;
         $data['percentage'] = $percentage;
         $data['remaining'] = max(0, $goal - $todayTotal);
@@ -150,9 +236,15 @@ class HydrationController
             return response()->json(['message' => 'Goal cannot exceed 5000ml'], 422);
         }
         
+        // Save to database
+        $user->hydration_goal = $goal;
+        $user->save();
+        
+        // Also update file for backward compatibility
         $data = $this->readData($user->id);
         $data['goal'] = $goal;
         $this->writeData($user->id, $data);
+        
         Log::debug('Hydration setGoal', ['user' => $user->id, 'goal' => $goal]);
         return response()->json(['goal' => $goal, 'message' => 'Goal updated successfully']);
     }
