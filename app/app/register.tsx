@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, Dimensions } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, Dimensions, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import api from './api';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,13 +12,28 @@ export default function Register() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [phone, setPhone] = useState('');
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [gender, setGender] = useState('');
+  const [address, setAddress] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [showGenderPicker, setShowGenderPicker] = useState(false);
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
 
   async function onRegister() {
-    if (!name || !email || !password) {
-      Alert.alert('Validation', 'Please fill all fields');
+    if (!name || !email || !password || !confirmPassword) {
+      Alert.alert('Validation', 'Please fill all required fields');
+      return;
+    }
+    if (password !== confirmPassword) {
+      Alert.alert('Validation', 'Passwords do not match');
+      return;
+    }
+    if (password.length < 6) {
+      Alert.alert('Validation', 'Password must be at least 6 characters');
       return;
     }
     if (!agreeTerms) {
@@ -27,8 +42,23 @@ export default function Register() {
     }
     setLoading(true);
     try {
-      const res = await api.post('/register', { name, email, password });
-      router.replace({ pathname: '/home', params: { token: res.token } } as any);
+      const res = await api.post('/register', { 
+        name, 
+        email, 
+        password,
+        password_confirmation: confirmPassword,
+        phone: phone || null,
+        date_of_birth: dateOfBirth || null,
+        gender: gender || null,
+        address: address || null,
+      });
+      
+      // Check if onboarding is needed
+      if (!res.onboarding_completed) {
+        router.replace({ pathname: '/onboarding', params: { token: res.token, name: res.user?.name || name } } as any);
+      } else {
+        router.replace({ pathname: '/home', params: { token: res.token } } as any);
+      }
     } catch (err: any) {
       console.log('register error', err);
       const message = err?.data?.message || err?.data || err?.message || 'Registration failed';
@@ -118,7 +148,125 @@ export default function Register() {
               <Ionicons name={showPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#8E8E93" />
             </TouchableOpacity>
           </View>
+
+          <View style={styles.inputWrapper}>
+            <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
+            <TextInput
+              placeholder="Confirm Password"
+              value={confirmPassword}
+              onChangeText={setConfirmPassword}
+              secureTextEntry={!showConfirmPassword}
+              style={styles.input}
+              placeholderTextColor="#8E8E93"
+            />
+            <TouchableOpacity onPress={() => setShowConfirmPassword(!showConfirmPassword)} style={styles.eyeIcon}>
+              <Ionicons name={showConfirmPassword ? "eye-outline" : "eye-off-outline"} size={20} color="#8E8E93" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.inputWrapper}>
+            <Ionicons name="call-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
+            <TextInput
+              placeholder="Phone Number (Optional)"
+              value={phone}
+              onChangeText={setPhone}
+              keyboardType="phone-pad"
+              style={styles.input}
+              placeholderTextColor="#8E8E93"
+            />
+          </View>
+
+          <View style={styles.inputWrapper}>
+            <Ionicons name="calendar-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
+            <TextInput
+              placeholder="Date of Birth (YYYY-MM-DD) (Optional)"
+              value={dateOfBirth}
+              onChangeText={setDateOfBirth}
+              style={styles.input}
+              placeholderTextColor="#8E8E93"
+            />
+          </View>
+
+          <TouchableOpacity 
+            style={styles.inputWrapper}
+            onPress={() => setShowGenderPicker(true)}
+          >
+            <Ionicons name="person-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
+            <Text style={[styles.input, !gender && { color: '#8E8E93' }]}>
+              {gender || 'Gender (Optional)'}
+            </Text>
+            <Ionicons name="chevron-down-outline" size={20} color="#8E8E93" />
+          </TouchableOpacity>
+
+          <View style={styles.inputWrapper}>
+            <Ionicons name="location-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
+            <TextInput
+              placeholder="Address (Optional)"
+              value={address}
+              onChangeText={setAddress}
+              multiline
+              numberOfLines={3}
+              style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+              placeholderTextColor="#8E8E93"
+            />
+          </View>
         </View>
+
+        {/* Gender Picker Modal */}
+        <Modal
+          visible={showGenderPicker}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowGenderPicker(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Gender</Text>
+              <TouchableOpacity 
+                style={styles.modalOption}
+                onPress={() => {
+                  setGender('male');
+                  setShowGenderPicker(false);
+                }}
+              >
+                <Text style={styles.modalOptionText}>Male</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalOption}
+                onPress={() => {
+                  setGender('female');
+                  setShowGenderPicker(false);
+                }}
+              >
+                <Text style={styles.modalOptionText}>Female</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalOption}
+                onPress={() => {
+                  setGender('other');
+                  setShowGenderPicker(false);
+                }}
+              >
+                <Text style={styles.modalOptionText}>Other</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalOption, { borderTopWidth: 1, borderTopColor: '#E5E7EB' }]}
+                onPress={() => {
+                  setGender('');
+                  setShowGenderPicker(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, { color: '#6B7280' }]}>Clear</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={styles.modalCancel}
+                onPress={() => setShowGenderPicker(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
 
         {/* Terms Checkbox */}
         <TouchableOpacity style={styles.termsContainer} onPress={() => setAgreeTerms(!agreeTerms)}>
@@ -355,6 +503,46 @@ const styles = StyleSheet.create({
   },
   bottomLinkHighlight: {
     color: '#1E3A8A',
+    fontWeight: '600',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 20,
+    paddingBottom: 40,
+    paddingHorizontal: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 20,
+    textAlign: 'center',
+  },
+  modalOption: {
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalOptionText: {
+    fontSize: 16,
+    color: '#1F2937',
+    fontWeight: '500',
+  },
+  modalCancel: {
+    marginTop: 20,
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 16,
+    color: '#EF4444',
     fontWeight: '600',
   },
 });

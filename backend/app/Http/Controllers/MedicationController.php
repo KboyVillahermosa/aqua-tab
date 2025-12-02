@@ -34,6 +34,20 @@ class MedicationController extends Controller
             'color' => 'nullable|string|max:7',
         ]);
         
+        // Check subscription limits
+        $plan = $user->currentSubscriptionPlan;
+        if ($plan && $plan->max_medications !== null) {
+            $currentCount = Medication::where('user_id', $user->id)->count();
+            if ($currentCount >= $plan->max_medications) {
+                return response()->json([
+                    'message' => "You've reached the medication limit for your plan ({$plan->max_medications} medications). Upgrade to Premium for unlimited medications.",
+                    'limit_reached' => true,
+                    'current_limit' => $plan->max_medications,
+                    'plan_name' => $plan->name,
+                ], 403);
+            }
+        }
+        
         $data['user_id'] = $user->id;
         
         // Set default values
