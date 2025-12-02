@@ -1,5 +1,12 @@
 <!doctype html>
 <html lang="en">
+<<<<<<< HEAD
+=======
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>@yield('title', 'AQUATAB ADMIN')</title>
+>>>>>>> 791b0041ee0407c9e584f30173364fb1b8c0d7ca
 
 <head>
   <meta charset="utf-8">
@@ -57,7 +64,7 @@
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"></path>
             </svg>
           </button>
-          <div class="text-lg font-semibold">@yield('title', 'Aqua Admin')</div>
+          <div class="text-lg font-semibold">@yield('title', 'AQUATAB ADMIN')</div>
           <div></div>
         </div>
       </div>

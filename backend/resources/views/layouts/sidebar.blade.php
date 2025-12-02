@@ -1,7 +1,7 @@
 <aside class="hidden lg:block w-72 bg-white border-r border-gray-200 min-h-screen sticky top-0">
     <div class="p-6">
         <div class="mb-6">
-            <h2 class="text-xl font-bold text-aqua">Aqua Admin</h2>
+            <h2 class="text-xl font-bold text-aqua">AQUATAB ADMIN</h2>
             <p class="text-sm text-gray-500">Health Management</p>
         </div>
 
@@ -46,7 +46,7 @@
     <div class="absolute inset-0 bg-black opacity-30"></div>
     <div class="relative bg-white w-64 h-full border-r p-6">
         <div class="mb-6">
-            <h2 class="text-xl font-bold text-aqua">Aqua Admin</h2>
+            <h2 class="text-xl font-bold text-aqua">AQUATAB ADMIN</h2>
             <p class="text-sm text-gray-500">Health Management</p>
         </div>
         <nav class="space-y-2">

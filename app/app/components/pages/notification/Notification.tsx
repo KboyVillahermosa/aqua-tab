@@ -1,12 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-// import * as Notifications from 'expo-notifications';
-// import * as Device from 'expo-device';
+import * as Notifications from 'expo-notifications';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
+import { notificationService } from '../../../services/notificationService';
 
 // Configure notification behavior (temporarily disabled)
 // Notifications.setNotificationHandler({
@@ -24,7 +24,7 @@ type NotificationItem = {
   type: 'hydration' | 'medication';
   title: string;
   body: string;
-  scheduledTime: string;
+  scheduled_time: string;
   status: 'scheduled' | 'delivered' | 'missed' | 'completed';
   data?: any;
   reminderId?: string;
@@ -83,37 +83,6 @@ export default function Notification() {
     AsyncStorage.setItem(STORAGE_KEYS.REMINDER_SETTINGS, JSON.stringify(reminderSettings));
   }, [reminderSettings]);
 
-  async function registerForPushNotificationsAsync() {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Notification permissions check temporarily disabled');
-    setPermissionGranted(false);
-  }
-
-  const setupNotificationListeners = useCallback(() => {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Notification listeners temporarily disabled');
-  }, []);
-
-  function handleNotificationReceived(notification: any) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Notification received handler temporarily disabled');
-  }
-
-  function handleNotificationResponse(response: any) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Notification response handler temporarily disabled');
-  }
-
-  function handleHydrationReminderResponse(response: any) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Hydration reminder response handler temporarily disabled');
-  }
-
-  function handleMedicationReminderResponse(response: any) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Medication reminder response handler temporarily disabled');
-  }
-
   const loadNotifications = useCallback(async () => {
     try {
       setLoading(true);
@@ -122,7 +91,17 @@ export default function Notification() {
         // Load from backend
         try {
           const serverNotifications = await api.get('/notifications', token as string);
-          setNotifications(serverNotifications || []);
+          // Transform backend format to frontend format
+          const transformed = (serverNotifications || []).map((n: any) => ({
+            id: n.id?.toString() || '',
+            type: n.type,
+            title: n.title,
+            body: n.body,
+            scheduled_time: n.scheduled_time,
+            status: n.status,
+            data: typeof n.data === 'string' ? JSON.parse(n.data || '{}') : n.data,
+          }));
+          setNotifications(transformed);
         } catch (e) {
           console.log('Failed to load notifications from server:', e);
         }
@@ -144,50 +123,199 @@ export default function Notification() {
     }
   }, [token]);
 
+  const registerForPushNotificationsAsync = useCallback(async () => {
+    try {
+      notificationService.setToken(token as string || null);
+      const granted = await notificationService.requestPermissions();
+      setPermissionGranted(granted);
+      return granted;
+    } catch (error) {
+      console.error('Error requesting notification permissions:', error);
+      setPermissionGranted(false);
+      return false;
+    }
+  }, [token]);
+
+  const handleHydrationReminderResponse = useCallback((response: Notifications.NotificationResponse) => {
+    const data = response.notification.request.content.data as any;
+    const notificationId = data?.id ? String(data.id) : '';
+    Alert.alert(
+      'Hydration Reminder',
+      'Did you drink water?',
+      [
+        { text: 'Snooze', onPress: () => snoozeHydrationReminder(notificationId) },
+        { text: 'Mark Complete', onPress: () => markHydrationCompleted(notificationId) },
+        { text: 'Later', style: 'cancel' },
+      ]
+    );
+  }, []);
+
+  const handleMedicationReminderResponse = useCallback((response: Notifications.NotificationResponse) => {
+    const data = response.notification.request.content.data as any;
+    const notificationId = data?.id ? String(data.id) : '';
+    Alert.alert(
+      'Medication Reminder',
+      'Did you take your medication?',
+      [
+        { text: 'Snooze', onPress: () => snoozeMedicationReminder(notificationId, 15) },
+        { text: 'Mark Taken', onPress: () => markMedicationTaken(notificationId) },
+        { text: 'Later', style: 'cancel' },
+      ]
+    );
+  }, []);
+
+  const setupNotificationListeners = useCallback(() => {
+    const cleanup = notificationService.setupNotificationHandlers(
+      (notification) => {
+        console.log('Notification received:', notification);
+        // Reload notifications when a new one is received
+        loadNotifications();
+      },
+      (response) => {
+        console.log('Notification tapped:', response);
+        const data = response.notification.request.content.data as any;
+        
+        // Handle different notification types
+        if (data?.type === 'hydration') {
+          handleHydrationReminderResponse(response);
+        } else if (data?.type === 'medication') {
+          handleMedicationReminderResponse(response);
+        }
+      }
+    );
+
+    return cleanup;
+  }, [loadNotifications, handleHydrationReminderResponse, handleMedicationReminderResponse]);
+
   useEffect(() => {
     registerForPushNotificationsAsync();
     loadNotifications();
-    setupNotificationListeners();
+    const cleanup = setupNotificationListeners();
     
     return () => {
-      // Cleanup is handled automatically by React Native
+      if (cleanup) cleanup();
     };
-  }, [loadNotifications, setupNotificationListeners]);
+  }, [loadNotifications, setupNotificationListeners, registerForPushNotificationsAsync]);
 
   async function scheduleHydrationReminder() {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Hydration reminder scheduling temporarily disabled');
+    if (!permissionGranted) {
+      Alert.alert('Permissions Required', 'Please enable notification permissions first.');
+      return;
+    }
+
+    try {
+      const interval = reminderSettings.hydration.interval || 120;
+      const amountMl = 200; // Default amount
+      
+      await notificationService.scheduleHydrationReminder(interval, amountMl);
+      
+      Alert.alert('Success', 'Hydration reminder scheduled!');
+      loadNotifications();
+    } catch (error) {
+      console.error('Error scheduling hydration reminder:', error);
+      Alert.alert('Error', 'Failed to schedule hydration reminder');
+    }
   }
 
-
   async function markHydrationCompleted(notificationId: string) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Mark hydration completed temporarily disabled');
+    if (!token) return;
+
+    try {
+      await notificationService.markCompleted(notificationId);
+      if (token) {
+        await api.post(`/notifications/${notificationId}/complete`, {}, token as string);
+      }
+      Alert.alert('Success', 'Hydration marked as completed!');
+      loadNotifications();
+    } catch (error) {
+      console.error('Error marking hydration as completed:', error);
+      Alert.alert('Error', 'Failed to mark hydration as completed');
+    }
   }
 
   async function markMedicationTaken(notificationId: string) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Mark medication taken temporarily disabled');
+    if (!token) return;
+
+    try {
+      await notificationService.markCompleted(notificationId);
+      if (token) {
+        await api.post(`/notifications/${notificationId}/complete`, {}, token as string);
+      }
+      Alert.alert('Success', 'Medication marked as taken!');
+      loadNotifications();
+    } catch (error) {
+      console.error('Error marking medication as taken:', error);
+      Alert.alert('Error', 'Failed to mark medication as taken');
+    }
   }
 
   async function snoozeHydrationReminder(notificationId: string) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Snooze hydration reminder temporarily disabled');
+    if (!token) return;
+
+    Alert.alert(
+      'Snooze Hydration',
+      'How long would you like to snooze?',
+      [
+        { text: '15 min', onPress: () => performSnooze(notificationId, 15) },
+        { text: '30 min', onPress: () => performSnooze(notificationId, 30) },
+        { text: '1 hour', onPress: () => performSnooze(notificationId, 60) },
+        { text: 'Cancel', style: 'cancel' },
+      ]
+    );
   }
 
-  async function snoozeMedicationReminder(notificationId: string, minutes: number) {
-    // Temporarily disabled - notifications will be enabled after Metro restart
-    console.log('Snooze medication reminder temporarily disabled');
+  async function snoozeMedicationReminder(notificationId: string, minutes: number = 15) {
+    await performSnooze(notificationId, minutes);
+  }
+
+  async function performSnooze(notificationId: string, minutes: number) {
+    if (!token) return;
+
+    try {
+      // Find the expo notification ID if we have it
+      const expoNotificationId = Array.from(notificationService.scheduledNotifications.entries())
+        .find(([backendId]) => backendId === notificationId)?.[1];
+
+      await notificationService.snoozeNotification(expoNotificationId || '', minutes, notificationId);
+      
+      Alert.alert('Snoozed', `Reminder snoozed for ${minutes} minutes`);
+      loadNotifications();
+    } catch (error) {
+      console.error('Error snoozing notification:', error);
+      Alert.alert('Error', 'Failed to snooze reminder');
+    }
   }
 
   async function clearAllNotifications() {
     Alert.alert('Clear All', 'Remove all notifications?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: async () => {
-        // Temporarily disabled - notifications will be enabled after Metro restart
-        console.log('Clear all notifications temporarily disabled');
-        setNotifications([]);
-      }},
+      { 
+        text: 'Clear', 
+        style: 'destructive', 
+        onPress: async () => {
+          try {
+            await notificationService.cancelAllNotifications();
+            setNotifications([]);
+            if (token) {
+              // Optionally clear from backend too
+              const allNotifications = await api.get('/notifications', token as string);
+              if (Array.isArray(allNotifications)) {
+                for (const notif of allNotifications) {
+                  try {
+                    await api.put(`/notifications/${notif.id}`, { status: 'completed' }, token as string);
+                  } catch (e) {
+                    console.log('Error clearing notification from backend:', e);
+                  }
+                }
+              }
+            }
+            Alert.alert('Success', 'All notifications cleared');
+          } catch (error) {
+            console.error('Error clearing notifications:', error);
+            Alert.alert('Error', 'Failed to clear notifications');
+          }
+        }
+      },
     ]);
   }
 
@@ -305,7 +433,7 @@ export default function Notification() {
                   <Text style={styles.notificationTitle}>{notification.title}</Text>
                   <Text style={styles.notificationBody}>{notification.body}</Text>
                   <Text style={styles.notificationTime}>
-                    {new Date(notification.scheduledTime).toLocaleString()}
+                    {new Date(notification.scheduled_time).toLocaleString()}
                   </Text>
                 </View>
                 
@@ -315,6 +443,34 @@ export default function Notification() {
                       {getStatusText(notification.status)}
                     </Text>
                   </View>
+                  {notification.status === 'scheduled' && (
+                    <View style={styles.notificationActions}>
+                      <TouchableOpacity
+                        style={styles.notificationActionButton}
+                        onPress={() => {
+                          if (notification.type === 'hydration') {
+                            snoozeHydrationReminder(notification.id);
+                          } else {
+                            snoozeMedicationReminder(notification.id, 15);
+                          }
+                        }}
+                      >
+                        <Ionicons name="time-outline" size={16} color="#3B82F6" />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.notificationActionButton}
+                        onPress={() => {
+                          if (notification.type === 'hydration') {
+                            markHydrationCompleted(notification.id);
+                          } else {
+                            markMedicationTaken(notification.id);
+                          }
+                        }}
+                      >
+                        <Ionicons name="checkmark-circle-outline" size={16} color="#10B981" />
+                      </TouchableOpacity>
+                    </View>
+                  )}
                 </View>
               </View>
             ))
@@ -419,9 +575,15 @@ const styles = StyleSheet.create({
   notificationTitle: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
   notificationBody: { fontSize: 14, color: '#6B7280', marginTop: 2 },
   notificationTime: { fontSize: 12, color: '#9CA3AF', marginTop: 4 },
-  notificationStatus: { alignItems: 'flex-end' },
+  notificationStatus: { alignItems: 'flex-end', gap: 8 },
   statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
   statusText: { fontSize: 12, fontWeight: '600' },
+  notificationActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  notificationActionButton: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F3F4F6',
+  },
   
   // Empty State
   emptyState: {

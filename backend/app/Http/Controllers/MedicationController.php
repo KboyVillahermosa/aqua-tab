@@ -111,6 +111,39 @@ class MedicationController extends Controller
             'status' => 'required|string',
             'time' => 'required|date',
         ]);
+        
+        // Check for duplicate entries within a 2-hour window of the scheduled time
+        // Prevent duplicates for the same scheduled time, regardless of status
+        $scheduledTime = \Carbon\Carbon::parse($data['time']);
+        $twoHoursBefore = $scheduledTime->copy()->subHours(2);
+        $twoHoursAfter = $scheduledTime->copy()->addHours(2);
+        
+        // Check for any existing entry (completed or skipped) for this time window
+        $existingEntry = MedicationHistory::where('medication_id', $medication->id)
+            ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
+            ->whereIn('status', ['completed', 'skipped'])
+            ->first();
+        
+        if ($existingEntry) {
+            // If trying to mark as completed but already marked as skipped, allow update
+            if ($data['status'] === 'completed' && $existingEntry->status === 'skipped') {
+                $existingEntry->update(['status' => 'completed', 'time' => $data['time']]);
+                return response()->json($existingEntry->fresh(), 200);
+            }
+            // If trying to mark as skipped but already marked as completed, don't allow
+            if ($data['status'] === 'skipped' && $existingEntry->status === 'completed') {
+                return response()->json([
+                    'message' => 'This medication has already been marked as completed for this scheduled time',
+                    'existing_entry' => $existingEntry
+                ], 409);
+            }
+            // Same status - duplicate
+            return response()->json([
+                'message' => 'An entry already exists for this scheduled time',
+                'existing_entry' => $existingEntry
+            ], 409); // Conflict status
+        }
+        
         $hist = MedicationHistory::create([
             'medication_id' => $medication->id,
             'status' => $data['status'],
@@ -190,8 +223,11 @@ class MedicationController extends Controller
         ];
 
         $today = now()->toDateString();
+        $now = now();
         
         foreach ($medications as $med) {
+            if (!$med->reminder) continue;
+            
             $times = $med->times ?? [];
             $stats['total_reminders_today'] += count($times);
             
@@ -202,6 +238,35 @@ class MedicationController extends Controller
                 
             $stats['completed_today'] += $history->where('status', 'completed')->count();
             $stats['missed_today'] += $history->where('status', 'skipped')->count();
+            
+            // Auto-mark missed medications that have passed their scheduled time
+            foreach ($times as $timeStr) {
+                $scheduledTime = \Carbon\Carbon::parse($timeStr);
+                $todayScheduledTime = $now->copy()->setTime($scheduledTime->hour, $scheduledTime->minute, $scheduledTime->second);
+                
+                // If scheduled time has passed (more than 30 minutes ago) and it's still today
+                $thirtyMinutesAgo = $now->copy()->subMinutes(30);
+                if ($todayScheduledTime->isBefore($thirtyMinutesAgo) && $todayScheduledTime->isToday()) {
+                    // Check if already marked
+                    $twoHoursBefore = $todayScheduledTime->copy()->subHours(2);
+                    $twoHoursAfter = $todayScheduledTime->copy()->addHours(2);
+                    
+                    $existingEntry = MedicationHistory::where('medication_id', $med->id)
+                        ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
+                        ->whereIn('status', ['completed', 'skipped'])
+                        ->first();
+                    
+                    if (!$existingEntry) {
+                        // Auto-mark as missed
+                        MedicationHistory::create([
+                            'medication_id' => $med->id,
+                            'status' => 'skipped',
+                            'time' => $todayScheduledTime,
+                        ]);
+                        $stats['missed_today']++;
+                    }
+                }
+            }
         }
 
         return response()->json($stats);
@@ -321,5 +386,105 @@ class MedicationController extends Controller
                 'recent_history' => []
             ], 500);
         }
+    }
+
+    /**
+     * Export medication history as CSV
+     */
+    public function exportCsv(Request $request)
+    {
+        $user = $request->user();
+        
+        // Check if user has data_export feature
+        if (!$user->canAccessFeature('data_export')) {
+            return response()->json([
+                'message' => 'Data export is only available for Premium subscribers. Please upgrade to export your medication history.',
+                'requires_premium' => true,
+            ], 403);
+        }
+
+        $medications = Medication::where('user_id', $user->id)->with('history')->get();
+        
+        $csvData = [];
+        $csvData[] = ['Medication Name', 'Dosage', 'Scheduled Time', 'Status', 'Date'];
+        
+        foreach ($medications as $medication) {
+            foreach ($medication->history as $history) {
+                $csvData[] = [
+                    $medication->name,
+                    $medication->dosage ?? '',
+                    $history->time,
+                    $history->status,
+                    $history->created_at->format('Y-m-d H:i:s'),
+                ];
+            }
+        }
+        
+        $filename = 'medication_history_' . date('Y-m-d') . '.csv';
+        $headers = [
+            'Content-Type' => 'text/csv',
+            'Content-Disposition' => 'attachment; filename="' . $filename . '"',
+        ];
+        
+        $output = fopen('php://output', 'w');
+        foreach ($csvData as $row) {
+            fputcsv($output, $row);
+        }
+        fclose($output);
+        
+        return response()->stream(function() use ($csvData) {
+            $output = fopen('php://output', 'w');
+            foreach ($csvData as $row) {
+                fputcsv($output, $row);
+            }
+            fclose($output);
+        }, 200, $headers);
+    }
+
+    /**
+     * Export medication history as PDF
+     */
+    public function exportPdf(Request $request)
+    {
+        $user = $request->user();
+        
+        // Check if user has data_export feature
+        if (!$user->canAccessFeature('data_export')) {
+            return response()->json([
+                'message' => 'Data export is only available for Premium subscribers. Please upgrade to export your medication history.',
+                'requires_premium' => true,
+            ], 403);
+        }
+
+        $medications = Medication::where('user_id', $user->id)->with('history')->get();
+        
+        // Generate simple HTML for PDF (can be enhanced with a PDF library like dompdf)
+        $html = '<html><head><title>Medication History</title></head><body>';
+        $html .= '<h1>Medication History Report</h1>';
+        $html .= '<p>Generated on: ' . date('Y-m-d H:i:s') . '</p>';
+        $html .= '<p>User: ' . htmlspecialchars($user->name) . '</p>';
+        $html .= '<table border="1" cellpadding="5" cellspacing="0" style="width:100%; border-collapse:collapse;">';
+        $html .= '<tr><th>Medication Name</th><th>Dosage</th><th>Scheduled Time</th><th>Status</th><th>Date</th></tr>';
+        
+        foreach ($medications as $medication) {
+            foreach ($medication->history as $history) {
+                $html .= '<tr>';
+                $html .= '<td>' . htmlspecialchars($medication->name) . '</td>';
+                $html .= '<td>' . htmlspecialchars($medication->dosage ?? '') . '</td>';
+                $html .= '<td>' . htmlspecialchars($history->time) . '</td>';
+                $html .= '<td>' . htmlspecialchars($history->status) . '</td>';
+                $html .= '<td>' . htmlspecialchars($history->created_at->format('Y-m-d H:i:s')) . '</td>';
+                $html .= '</tr>';
+            }
+        }
+        
+        $html .= '</table></body></html>';
+        
+        $filename = 'medication_history_' . date('Y-m-d') . '.html';
+        
+        // For now, return HTML. In production, use a PDF library like dompdf or tcpdf
+        return response($html, 200)
+            ->header('Content-Type', 'text/html')
+            ->header('Content-Disposition', 'attachment; filename="' . $filename . '"');
     }
 }

@@ -34,13 +34,30 @@ export async function post(path: string, body: any, token?: string) {
   return data;
 }
 
-export async function get(path: string, token?: string) {
+export async function get(path: string, token?: string, timeout: number = 10000) {
   const headers: any = { Accept: 'application/json' };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-  const res = await fetch(joinPath(path), { headers });
-  const data = await parseResponse(res);
-  if (!res.ok) throw { status: res.status, data };
-  return data;
+  
+  // Add timeout to prevent infinite hanging
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+  
+  try {
+    const res = await fetch(joinPath(path), { 
+      headers,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    const data = await parseResponse(res);
+    if (!res.ok) throw { status: res.status, data };
+    return data;
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw { status: 408, data: { message: 'Request timeout' } };
+    }
+    throw error;
+  }
 }
 
 export async function put(path: string, body: any, token?: string) {

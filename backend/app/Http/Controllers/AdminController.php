@@ -8,8 +8,11 @@ use App\Models\HydrationEntry;
 use App\Models\Medication;
 use App\Models\MedicationHistory;
 use App\Models\Notification;
+use App\Models\Subscription;
+use App\Models\SubscriptionPlan;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Carbon\Carbon;
 
@@ -54,7 +57,92 @@ class AdminController extends Controller
     public function dashboard()
     {
         $users = User::take(5)->get();
-        return view('admin.dashboard', compact('users'));
+        
+        // Calculate key metrics
+        $totalUsers = User::where('role', '!=', 'admin')->count();
+        
+        // DAU: Users who logged in today (using updated_at as proxy for last activity)
+        $dau = User::where('role', '!=', 'admin')
+            ->whereDate('updated_at', Carbon::today())
+            ->count();
+        
+        // MRR: Monthly Recurring Revenue from active premium subscriptions
+        $mrr = Subscription::where('status', 'active')
+            ->where('ends_at', '>', now())
+            ->with('plan')
+            ->get()
+            ->sum(function ($subscription) {
+                $plan = $subscription->plan;
+                if (!$plan) return 0;
+                // If billing period is monthly, use price as-is; if yearly, divide by 12
+                return $plan->billing_period === 'monthly' 
+                    ? $plan->price 
+                    : ($plan->price / 12);
+            });
+        
+        // Premium Conversion Rate: % of users on paid plan
+        $premiumUsers = User::where('role', '!=', 'admin')
+            ->where(function ($query) {
+                $query->whereHas('activeSubscription', function ($q) {
+                    $q->where('status', 'active')
+                      ->where('ends_at', '>', now());
+                })
+                ->orWhere(function ($q) {
+                    $q->whereNotNull('subscription_expires_at')
+                      ->where('subscription_expires_at', '>', now());
+                });
+            })
+            ->count();
+        
+        $premiumConversionRate = $totalUsers > 0 
+            ? round(($premiumUsers / $totalUsers) * 100, 2) 
+            : 0;
+        
+        // User Growth: Last 30 days
+        $userGrowth = [];
+        for ($i = 29; $i >= 0; $i--) {
+            $date = Carbon::now()->subDays($i);
+            $count = User::where('role', '!=', 'admin')
+                ->whereDate('created_at', '<=', $date)
+                ->count();
+            $userGrowth[] = [
+                'date' => $date->format('M j'),
+                'users' => $count
+            ];
+        }
+        
+        // Hydration Stats: Average water intake per day (last 30 days)
+        $hydrationStats = [];
+        for ($i = 29; $i >= 0; $i--) {
+            $date = Carbon::now()->subDays($i);
+            $totalAmount = HydrationEntry::whereDate('created_at', $date)
+                ->sum('amount_ml');
+            $entryCount = HydrationEntry::whereDate('created_at', $date)->count();
+            $average = $entryCount > 0 ? round($totalAmount / $entryCount, 0) : 0;
+            
+            $hydrationStats[] = [
+                'date' => $date->format('M j'),
+                'average' => $average
+            ];
+        }
+        
+        // Platform Split: iOS vs Android (placeholder - using 50/50 for now)
+        // TODO: Add platform tracking to users table
+        $platformSplit = [
+            ['platform' => 'iOS', 'count' => round($totalUsers * 0.5)],
+            ['platform' => 'Android', 'count' => round($totalUsers * 0.5)]
+        ];
+        
+        return view('admin.dashboard', compact(
+            'users',
+            'totalUsers',
+            'dau',
+            'mrr',
+            'premiumConversionRate',
+            'userGrowth',
+            'hydrationStats',
+            'platformSplit'
+        ));
     }
 
     public function createUser()

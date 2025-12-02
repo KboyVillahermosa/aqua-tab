@@ -1,8 +1,10 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert, Platform, Modal } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import api from './api';
+import DateTimePicker from '@react-native-community/datetimepicker';
+import { Audio } from 'expo-av';
+import * as api from './api';
 
 const { width, height } = Dimensions.get('window');
 
@@ -19,10 +21,24 @@ interface OnboardingData {
   weight?: number;
   weight_unit?: 'kg' | 'lbs';
   age?: number;
+  gender?: string;
+  year_of_birth?: number;
   reminder_tone?: string;
   notification_permissions_accepted?: boolean;
   battery_optimization_set?: boolean;
+  emergency_contact?: string;
 }
+
+// Reminder tone options
+// Note: Sound files should be added to app/assets/sounds/ directory
+// For now, using system notification sounds as fallback
+const REMINDER_TONES = [
+  { id: 'default', name: 'Default', sound: null },
+  { id: 'gentle', name: 'Gentle Chime', sound: null },
+  { id: 'classic', name: 'Classic Bell', sound: null },
+  { id: 'modern', name: 'Modern Alert', sound: null },
+  { id: 'soft', name: 'Soft Tone', sound: null },
+];
 
 export default function Onboarding() {
   const router = useRouter();
@@ -33,11 +49,21 @@ export default function Onboarding() {
   const [currentStep, setCurrentStep] = useState(0);
   const [data, setData] = useState<OnboardingData>({});
   const [loading, setLoading] = useState(false);
+  
+  // Time picker states
+  const [showTimePicker, setShowTimePicker] = useState(false);
+  const [timePickerField, setTimePickerField] = useState<string | null>(null);
+  const [tempTime, setTempTime] = useState<Date>(new Date());
+  
+  // Audio state
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [playingTone, setPlayingTone] = useState<string | null>(null);
 
   const steps = [
     'nickname',
     'welcome',
     'profile',
+    'emergency-contact',
     'medication-time',
     'wake-up',
     'end-of-day',
@@ -51,14 +77,188 @@ export default function Onboarding() {
     'complete'
   ];
 
+  // Load saved data on mount
+  useEffect(() => {
+    const loadSavedData = async () => {
+      try {
+        if (token) {
+          const saved = await api.get('/onboarding', token);
+          if (saved && typeof saved === 'object') {
+            // Merge saved data with current data, preserving any existing values
+            setData(prev => ({ ...prev, ...saved }));
+          }
+        }
+      } catch (err) {
+        // Endpoint might not exist yet, which is fine
+        console.log('Note: Could not load saved onboarding data (this is normal if starting fresh):', err);
+      }
+    };
+    loadSavedData();
+  }, [token]);
+
+  // Cleanup audio on unmount
+  useEffect(() => {
+    return () => {
+      if (sound) {
+        sound.unloadAsync();
+      }
+    };
+  }, [sound]);
+
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
+  };
+
+  const formatTime = (timeString?: string): string => {
+    if (!timeString) return '';
+    try {
+      // Handle both "HH:MM" and "HH:MM AM/PM" formats
+      const [time, period] = timeString.split(' ');
+      const [hours, minutes] = time.split(':');
+      const hour = parseInt(hours);
+      const min = minutes || '00';
+      
+      if (period) {
+        // Already in 12-hour format
+        return timeString;
+      } else {
+        // Convert 24-hour to 12-hour
+        const hour12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
+        const ampm = hour >= 12 ? 'PM' : 'AM';
+        return `${hour12}:${min.padStart(2, '0')} ${ampm}`;
+      }
+    } catch {
+      return timeString;
+    }
+  };
+
+  const parseTimeToDate = (timeString?: string): Date => {
+    if (!timeString) {
+      return new Date();
+    }
+    try {
+      const [time, period] = timeString.split(' ');
+      const [hours, minutes] = time.split(':');
+      let hour = parseInt(hours);
+      const min = parseInt(minutes || '0');
+      
+      if (period) {
+        // 12-hour format
+        if (period.toUpperCase() === 'PM' && hour !== 12) hour += 12;
+        if (period.toUpperCase() === 'AM' && hour === 12) hour = 0;
+      }
+      
+      const date = new Date();
+      date.setHours(hour, min, 0, 0);
+      return date;
+    } catch {
+      return new Date();
+    }
+  };
+
+  const openTimePicker = (field: string) => {
+    const currentTime = parseTimeToDate(data[field as keyof OnboardingData] as string);
+    setTempTime(currentTime);
+    setTimePickerField(field);
+    setShowTimePicker(true);
+  };
+
+  const handleTimeChange = (event: any, selectedTime?: Date) => {
+    if (Platform.OS === 'android') {
+      setShowTimePicker(false);
+    }
+    
+    if (selectedTime && timePickerField) {
+      const hours = selectedTime.getHours();
+      const minutes = selectedTime.getMinutes();
+      const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const timeString = `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      updateData(timePickerField as keyof OnboardingData, timeString);
+      setTempTime(selectedTime);
+    }
+    
+    if (Platform.OS === 'ios') {
+      if (event.type === 'dismissed') {
+        setShowTimePicker(false);
+      }
+    }
+  };
+
+  const confirmTimePicker = () => {
+    if (timePickerField && tempTime) {
+      const hours = tempTime.getHours();
+      const minutes = tempTime.getMinutes();
+      const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
+      const ampm = hours >= 12 ? 'PM' : 'AM';
+      const timeString = `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
+      updateData(timePickerField as keyof OnboardingData, timeString);
+    }
+    setShowTimePicker(false);
+    setTimePickerField(null);
+  };
+
+  const playTone = async (toneId: string) => {
+    try {
+      // Stop any currently playing sound
+      if (sound) {
+        await sound.stopAsync();
+        await sound.unloadAsync();
+        setSound(null);
+      }
+
+      const tone = REMINDER_TONES.find(t => t.id === toneId);
+      if (!tone) {
+        return;
+      }
+
+      setPlayingTone(toneId);
+
+      // If sound file exists, play it
+      if (tone.sound) {
+        try {
+          const { sound: newSound } = await Audio.Sound.createAsync(tone.sound, { shouldPlay: true });
+          setSound(newSound);
+
+          newSound.setOnPlaybackStatusUpdate((status) => {
+            if (status.isLoaded && status.didJustFinish) {
+              setPlayingTone(null);
+            }
+          });
+        } catch (error) {
+          console.log('Error loading sound file:', error);
+          // Fall through to system sound
+        }
+      }
+
+      // Use system notification sound as preview
+      // This will use the device's default notification sound
+      if (!tone.sound) {
+        // For preview, we'll use a simple beep pattern
+        // In production, you would add actual sound files to app/assets/sounds/
+        setTimeout(() => {
+          setPlayingTone(null);
+        }, 1000);
+      }
+    } catch (error) {
+      console.log('Error playing tone:', error);
+      setPlayingTone(null);
+    }
+  };
+
+  const stopTone = async () => {
+    if (sound) {
+      await sound.stopAsync();
+      await sound.unloadAsync();
+      setSound(null);
+      setPlayingTone(null);
+    }
   };
 
   const nextStep = async () => {
     if (currentStep < steps.length - 1) {
       // Save data to backend on certain steps
-      if (['nickname', 'profile', 'medication-time', 'wake-up', 'end-of-day', 'meal-times', 'climate', 'exercise', 'weight', 'age'].includes(steps[currentStep])) {
+      if (['nickname', 'profile', 'medication-time', 'wake-up', 'end-of-day', 'meal-times', 'climate', 'exercise', 'weight', 'age', 'reminder-tone'].includes(steps[currentStep])) {
         try {
           await api.put('/onboarding/update', data, token);
         } catch (err) {
@@ -178,10 +378,14 @@ export default function Onboarding() {
                 placeholder="2001"
                 placeholderTextColor="#8E8E93"
                 keyboardType="numeric"
-                value={data.age ? (new Date().getFullYear() - data.age).toString() : ''}
+                value={data.year_of_birth ? data.year_of_birth.toString() : (data.age ? (new Date().getFullYear() - data.age).toString() : '')}
                 onChangeText={(text) => {
                   const year = parseInt(text);
-                  if (year && year > 1900 && year <= new Date().getFullYear()) {
+                  if (text === '') {
+                    updateData('year_of_birth', undefined);
+                    updateData('age', undefined);
+                  } else if (year && year > 1900 && year <= new Date().getFullYear()) {
+                    updateData('year_of_birth', year);
                     updateData('age', new Date().getFullYear() - year);
                   }
                 }}
@@ -200,13 +404,12 @@ export default function Onboarding() {
             <Text style={styles.title}>What time do you usually take your first medication?</Text>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Time</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="8:00 AM"
-                placeholderTextColor="#8E8E93"
-                value={data.first_medication_time || ''}
-                onChangeText={(text) => updateData('first_medication_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('first_medication_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.first_medication_time && styles.timeInputPlaceholder]}>
+                  {data.first_medication_time ? formatTime(data.first_medication_time) : '8:00 AM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
@@ -230,13 +433,12 @@ export default function Onboarding() {
             <Text style={styles.title}>When do you usually wake up?</Text>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Time</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="8:00 AM"
-                placeholderTextColor="#8E8E93"
-                value={data.wake_up_time || ''}
-                onChangeText={(text) => updateData('wake_up_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('wake_up_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.wake_up_time && styles.timeInputPlaceholder]}>
+                  {data.wake_up_time ? formatTime(data.wake_up_time) : '8:00 AM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Next</Text>
@@ -255,13 +457,12 @@ export default function Onboarding() {
             <Text style={styles.title}>When do you usually end a day?</Text>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Time</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="11:00 PM"
-                placeholderTextColor="#8E8E93"
-                value={data.end_of_day_time || ''}
-                onChangeText={(text) => updateData('end_of_day_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('end_of_day_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.end_of_day_time && styles.timeInputPlaceholder]}>
+                  {data.end_of_day_time ? formatTime(data.end_of_day_time) : '11:00 PM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Next</Text>
@@ -280,33 +481,30 @@ export default function Onboarding() {
             <Text style={styles.title}>What's your usual meal time?</Text>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Breakfast</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="8:30 AM"
-                placeholderTextColor="#8E8E93"
-                value={data.breakfast_time || ''}
-                onChangeText={(text) => updateData('breakfast_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('breakfast_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.breakfast_time && styles.timeInputPlaceholder]}>
+                  {data.breakfast_time ? formatTime(data.breakfast_time) : '8:30 AM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Lunch</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="12:00 PM"
-                placeholderTextColor="#8E8E93"
-                value={data.lunch_time || ''}
-                onChangeText={(text) => updateData('lunch_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('lunch_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.lunch_time && styles.timeInputPlaceholder]}>
+                  {data.lunch_time ? formatTime(data.lunch_time) : '12:00 PM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Dinner</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="7:00 PM"
-                placeholderTextColor="#8E8E93"
-                value={data.dinner_time || ''}
-                onChangeText={(text) => updateData('dinner_time', text)}
-              />
+              <TouchableOpacity onPress={() => openTimePicker('dinner_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.dinner_time && styles.timeInputPlaceholder]}>
+                  {data.dinner_time ? formatTime(data.dinner_time) : '7:00 PM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Next</Text>
@@ -430,7 +628,16 @@ export default function Onboarding() {
                 placeholderTextColor="#8E8E93"
                 keyboardType="numeric"
                 value={data.age?.toString() || ''}
-                onChangeText={(text) => updateData('age', parseInt(text) || 0)}
+                onChangeText={(text) => {
+                  const age = parseInt(text);
+                  if (text === '') {
+                    updateData('age', undefined);
+                    updateData('year_of_birth', undefined);
+                  } else if (age && age > 0 && age < 150) {
+                    updateData('age', age);
+                    updateData('year_of_birth', new Date().getFullYear() - age);
+                  }
+                }}
               />
             </View>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
@@ -444,13 +651,48 @@ export default function Onboarding() {
           <View style={styles.stepContainer}>
             <Text style={styles.title}>Pick your reminder tone</Text>
             <Text style={styles.description}>For what matters most, choose a sound you won't ignore.</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Sound</Text>
-              <View style={styles.input}>
-                <Text style={{ color: '#1F2937' }}>MyTherapy (standard)</Text>
-              </View>
+            
+            <View style={styles.toneOptionsContainer}>
+              {REMINDER_TONES.map((tone) => (
+                <TouchableOpacity
+                  key={tone.id}
+                  style={[
+                    styles.toneOption,
+                    data.reminder_tone === tone.id && styles.toneOptionSelected,
+                    playingTone === tone.id && styles.toneOptionPlaying
+                  ]}
+                  onPress={() => {
+                    updateData('reminder_tone', tone.id);
+                    playTone(tone.id);
+                  }}
+                >
+                  <View style={styles.toneOptionContent}>
+                    <Ionicons 
+                      name={playingTone === tone.id ? "stop-circle" : "musical-notes"} 
+                      size={24} 
+                      color={data.reminder_tone === tone.id ? '#1E3A8A' : '#6B7280'} 
+                    />
+                    <Text style={[
+                      styles.toneOptionText,
+                      data.reminder_tone === tone.id && styles.toneOptionTextSelected
+                    ]}>
+                      {tone.name}
+                    </Text>
+                  </View>
+                  {data.reminder_tone === tone.id && (
+                    <Ionicons name="checkmark-circle" size={20} color="#1E3A8A" />
+                  )}
+                </TouchableOpacity>
+              ))}
             </View>
-            <Text style={styles.hintText}>You can always change this later</Text>
+            
+            {playingTone && (
+              <TouchableOpacity onPress={stopTone} style={styles.stopButton}>
+                <Text style={styles.stopButtonText}>Stop Preview</Text>
+              </TouchableOpacity>
+            )}
+            
+            <Text style={styles.hintText}>Tap a tone to preview it. You can always change this later.</Text>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
               <Text style={styles.primaryButtonText}>Continue</Text>
             </TouchableOpacity>
@@ -506,6 +748,49 @@ export default function Onboarding() {
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {renderStep()}
       </ScrollView>
+
+      {/* Time Picker Modal for iOS */}
+      {Platform.OS === 'ios' && showTimePicker && (
+        <Modal
+          transparent
+          animationType="slide"
+          visible={showTimePicker}
+          onRequestClose={() => setShowTimePicker(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <TouchableOpacity onPress={() => setShowTimePicker(false)}>
+                  <Text style={styles.modalCancel}>Cancel</Text>
+                </TouchableOpacity>
+                <Text style={styles.modalTitle}>Select Time</Text>
+                <TouchableOpacity onPress={confirmTimePicker}>
+                  <Text style={styles.modalConfirm}>Done</Text>
+                </TouchableOpacity>
+              </View>
+              <DateTimePicker
+                value={tempTime}
+                mode="time"
+                is24Hour={false}
+                display="spinner"
+                onChange={handleTimeChange}
+                style={styles.dateTimePicker}
+              />
+            </View>
+          </View>
+        </Modal>
+      )}
+
+      {/* Time Picker for Android */}
+      {Platform.OS === 'android' && showTimePicker && (
+        <DateTimePicker
+          value={tempTime}
+          mode="time"
+          is24Hour={false}
+          display="default"
+          onChange={handleTimeChange}
+        />
+      )}
     </View>
   );
 }
@@ -568,6 +853,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
     borderWidth: 1,
     borderColor: '#E5E7EB',
+  },
+  timeInputButton: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  timeInputText: {
+    color: '#1F2937',
+    fontSize: 16,
+  },
+  timeInputPlaceholder: {
+    color: '#8E8E93',
   },
   fieldRow: {
     marginBottom: 20,
@@ -711,7 +1013,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   exerciseTextSelected: {
-    color: '#fff',
+    color: '#1E3A8A',
     fontWeight: '600',
   },
   unitSelector: {
@@ -743,5 +1045,91 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: 'center',
   },
+  // Tone selection styles
+  toneOptionsContainer: {
+    gap: 12,
+    marginBottom: 20,
+  },
+  toneOption: {
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  toneOptionSelected: {
+    borderColor: '#1E3A8A',
+    backgroundColor: '#EBF8FF',
+  },
+  toneOptionPlaying: {
+    borderColor: '#3B82F6',
+    backgroundColor: '#DBEAFE',
+  },
+  toneOptionContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  toneOptionText: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  toneOptionTextSelected: {
+    color: '#1E3A8A',
+    fontWeight: '600',
+  },
+  stopButton: {
+    backgroundColor: '#EF4444',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  stopButtonText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  // Modal styles for iOS time picker
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingBottom: 40,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalCancel: {
+    color: '#6B7280',
+    fontSize: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#1F2937',
+  },
+  modalConfirm: {
+    color: '#1E3A8A',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  dateTimePicker: {
+    height: 200,
+  },
 });
-
