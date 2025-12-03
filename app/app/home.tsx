@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
@@ -25,6 +26,7 @@ interface QuickStatus {
 }
 
 export default function Home() {
+  const insets = useSafeAreaInsets();
   const { token } = useLocalSearchParams();
   const router = useRouter();
   const [user, setUser] = useState<any>(null);
@@ -38,6 +40,32 @@ export default function Home() {
   const [weeklyReport, setWeeklyReport] = useState<any>(null);
   const [patterns, setPatterns] = useState<any[]>([]);
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
+  const [medicineSearch, setMedicineSearch] = useState('');
+  const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Debounce medicine search
+  useEffect(() => {
+    const searchMedicines = async () => {
+      if (medicineSearch.trim().length < 2) {
+        setMedicineSuggestions([]);
+        setShowSuggestions(false);
+        return;
+      }
+
+      try {
+        const response = await api.get(`/medicines/search?query=${encodeURIComponent(medicineSearch)}`);
+        setMedicineSuggestions(response.medicines || []);
+        setShowSuggestions(true);
+      } catch (err) {
+        console.log('Medicine search error:', err);
+        setMedicineSuggestions([]);
+      }
+    };
+
+    const debounceTimer = setTimeout(searchMedicines, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [medicineSearch]);
 
   useEffect(() => {
     // Safety timeout - always set loading to false after 5 seconds max (very aggressive)
@@ -213,10 +241,17 @@ export default function Home() {
     }
   };
 
+  const getTypeIcon = (type: string) => {
+    if (type === 'medication') return 'medical';
+    if (type === 'hydration') return 'water';
+    return 'notifications';
+  };
+
   const menuItems = [
     { label: 'Settings', icon: 'settings-outline', route: '/components/pages/settings/Settings' },
     { label: 'Profile', icon: 'person-outline', route: '/components/pages/profile/Profile' },
     { label: 'Help & Support', icon: 'help-circle-outline', route: null },
+    { label: 'Insights', icon: 'analytics-outline', route: '/insights' },
   ];
 
   const handleMenuAction = (item: typeof menuItems[0]) => {
@@ -230,9 +265,11 @@ export default function Home() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
-        {/* Header */}
-        <View style={styles.header}>
+      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false} stickyHeaderIndices={[1]}>
+        {/* Group pre-timeline content for stable sticky index */}
+        <View style={[styles.preContent, { paddingTop: insets.top || 12 }]}>
+          {/* Header */}
+          <View style={styles.header}>
           <TouchableOpacity style={styles.menuButton} onPress={() => setMenuVisible(true)}>
             <Ionicons name="menu" size={24} color="#1F2937" />
           </TouchableOpacity>
@@ -245,42 +282,123 @@ export default function Home() {
               {(user?.name || 'U').split(' ').map((s:any)=>s[0]).slice(0,2).join('').toUpperCase()}
             </Text>
           </TouchableOpacity>
-        </View>
+          </View>
 
-        {/* Welcome Section */}
-        <View style={styles.welcomeSection}>
+          {/* Welcome Section */}
+          <View style={styles.welcomeSection}>
           <Text style={styles.welcomeText}>Hi, {displayName}</Text>
           
-          <View style={styles.searchContainer}>
-            <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
-            <TextInput
-              placeholder="Search medicine"
-              style={styles.searchInput}
-              placeholderTextColor="#9CA3AF"
-            />
-          </View>
-        </View>
-
-        {/* Premium Badge - Show if not premium */}
-        {subscription && subscription.plan_slug !== 'premium' && (
-          <TouchableOpacity 
-            style={styles.premiumBadge}
-            onPress={() => setPremiumPopupVisible(true)}
-          >
-            <View style={styles.premiumBadgeContent}>
-              <Ionicons name="star" size={20} color="#F59E0B" />
-              <View style={styles.premiumBadgeText}>
-                <Text style={styles.premiumBadgeTitle}>Unlock Premium</Text>
-                <Text style={styles.premiumBadgeSubtitle}>Get unlimited features • ₱149/month</Text>
-              </View>
-              <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+          <View>
+            <View style={styles.searchContainer}>
+              <Ionicons name="search" size={20} color="#6B7280" style={styles.searchIcon} />
+              <TextInput
+                placeholder="Search medicine"
+                style={styles.searchInput}
+                placeholderTextColor="#9CA3AF"
+                value={medicineSearch}
+                onChangeText={setMedicineSearch}
+                onFocus={() => medicineSearch.length >= 2 && setShowSuggestions(true)}
+              />
+              {medicineSearch.length > 0 && (
+                <TouchableOpacity 
+                  style={styles.searchClear}
+                  onPress={() => {
+                    setMedicineSearch('');
+                    setShowSuggestions(false);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={20} color="#9CA3AF" />
+                </TouchableOpacity>
+              )}
             </View>
-          </TouchableOpacity>
-        )}
+            
+            {/* Medicine Suggestions Dropdown */}
+            {showSuggestions && medicineSuggestions.length > 0 && (
+              <View style={styles.suggestionsContainer}>
+                <ScrollView style={styles.suggestionsList} nestedScrollEnabled>
+                  {medicineSuggestions.map((medicine) => (
+                    <TouchableOpacity
+                      key={medicine.id}
+                      style={styles.suggestionItem}
+                      onPress={() => {
+                        setMedicineSearch('');
+                        setShowSuggestions(false);
+                        Alert.alert(
+                          medicine.name,
+                          `${medicine.generic_name ? `Generic: ${medicine.generic_name}\n` : ''}${medicine.brand ? `Brand: ${medicine.brand}\n` : ''}Category: ${medicine.category}\n${medicine.description ? `\n${medicine.description}` : ''}${medicine.dosage ? `\n\nRecommended Dosage: ${medicine.dosage}` : ''}`,
+                          [
+                            { text: 'Close', style: 'cancel' },
+                            {
+                              text: 'Add to Medications',
+                              onPress: () => {
+                                // Determine frequency from dosage text
+                                let frequency = 'daily';
+                                const dosageLower = (medicine.dosage || '').toLowerCase();
+                                if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
+                                  frequency = 'twice_daily';
+                                } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
+                                  frequency = 'three_times_daily';
+                                } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
+                                  frequency = 'four_times_daily';
+                                }
+                                
+                                router.push({ 
+                                  pathname: '/components/pages/medication/Medication', 
+                                  params: { 
+                                    token, 
+                                    medicineName: medicine.name, 
+                                    medicineDosage: medicine.dosage || '',
+                                    medicineData: JSON.stringify({
+                                      description: medicine.description,
+                                      category: medicine.category,
+                                      frequency: frequency
+                                    })
+                                  } 
+                                } as any);
+                              }
+                            }
+                          ]
+                        );
+                      }}
+                    >
+                      <View style={styles.suggestionIcon}>
+                        <Ionicons name="medical" size={20} color="#1E3A8A" />
+                      </View>
+                      <View style={styles.suggestionContent}>
+                        <Text style={styles.suggestionName}>{medicine.name}</Text>
+                        <Text style={styles.suggestionDetails}>
+                          {medicine.generic_name || medicine.brand || medicine.category}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={16} color="#9CA3AF" />
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+              </View>
+            )}
+          </View>
+          </View>
 
-        {/* Weekly Report Card - Premium Feature */}
-        {subscription?.plan_slug === 'premium' && weeklyReport && (
-          <View style={styles.weeklyReportCard}>
+          {/* Premium Badge - Show if not premium */}
+          {subscription && subscription.plan_slug !== 'premium' && (
+            <TouchableOpacity 
+              style={styles.premiumBadge}
+              onPress={() => setPremiumPopupVisible(true)}
+            >
+              <View style={styles.premiumBadgeContent}>
+                <Ionicons name="star" size={20} color="#F59E0B" />
+                <View style={styles.premiumBadgeText}>
+                  <Text style={styles.premiumBadgeTitle}>Unlock Premium</Text>
+                  <Text style={styles.premiumBadgeSubtitle}>Get unlimited features • ₱149/month</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* Weekly Report Card - Premium Feature */}
+          {subscription?.plan_slug === 'premium' && weeklyReport && (
+            <View style={styles.weeklyReportCard}>
             <View style={styles.weeklyReportHeader}>
               <Ionicons name="analytics" size={24} color="#1E3A8A" />
               <Text style={styles.weeklyReportTitle}>Weekly Report Card</Text>
@@ -302,12 +420,12 @@ export default function Home() {
               <Text style={styles.weeklyReportScoreLabel}>Overall Score</Text>
               <Text style={styles.weeklyReportScoreValue}>{weeklyReport.overall_score || 0}%</Text>
             </View>
-          </View>
-        )}
+            </View>
+          )}
 
-        {/* Pattern Detection - Premium Feature */}
-        {subscription?.plan_slug === 'premium' && patterns.length > 0 && (
-          <View style={styles.patternsCard}>
+          {/* Pattern Detection - Premium Feature */}
+          {subscription?.plan_slug === 'premium' && patterns.length > 0 && (
+            <View style={styles.patternsCard}>
             <View style={styles.patternsHeader}>
               <Ionicons name="bulb" size={24} color="#F59E0B" />
               <Text style={styles.patternsTitle}>Smart Insights</Text>
@@ -318,12 +436,12 @@ export default function Home() {
                 <Text style={styles.patternText}>{pattern.pattern}</Text>
               </View>
             ))}
-          </View>
-        )}
+            </View>
+          )}
 
-        {/* Snooze Suggestions - Premium Feature */}
-        {subscription?.plan_slug === 'premium' && snoozeSuggestions.length > 0 && (
-          <View style={styles.snoozeCard}>
+          {/* Snooze Suggestions - Premium Feature */}
+          {subscription?.plan_slug === 'premium' && snoozeSuggestions.length > 0 && (
+            <View style={styles.snoozeCard}>
             <View style={styles.snoozeHeader}>
               <Ionicons name="time" size={24} color="#10B981" />
               <Text style={styles.snoozeTitle}>Smart Reminder Suggestions</Text>
@@ -354,11 +472,11 @@ export default function Home() {
                 </TouchableOpacity>
               </View>
             ))}
-          </View>
-        )}
+            </View>
+          )}
 
-        {/* Quick Status Card */}
-        <View style={styles.statusCard}>
+          {/* Quick Status Card */}
+          <View style={styles.statusCard}>
           <View style={styles.statusText}>
             <Text style={styles.statusTitle}>
               Quick status: {quickStatus.medicationsLeft} medication{quickStatus.medicationsLeft !== 1 ? 's' : ''} left today • {quickStatus.hydrationPercentage}% hydration reached
@@ -367,40 +485,44 @@ export default function Home() {
           <View style={styles.statusIllustration}>
             <Ionicons name="medical" size={32} color="#3B82F6" />
           </View>
+          </View>
+
+          {/* Categories Section */}
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>Categories</Text>
+            <TouchableOpacity style={styles.seeAllButton}>
+              <Ionicons name="chevron-forward" size={20} color="#6B7280" />
+            </TouchableOpacity>
+          </View>
+
+          <View style={styles.categoriesGrid}>
+            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}>
+              <Ionicons name="medical" size={32} color="white" />
+              <Text style={styles.categoryText}>Medication</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}>
+              <Ionicons name="water" size={32} color="white" />
+              <Text style={styles.categoryText}>Hydration</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any)}>
+              <Ionicons name="notifications" size={32} color="white" />
+              <Text style={styles.categoryText}>Reminders</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/insights', params: { token } } as any)}>
+              <Ionicons name="analytics" size={32} color="white" />
+              <Text style={styles.categoryText}>Insights</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Divider after Categories */}
+          <View style={styles.sectionDivider} />
         </View>
 
-        {/* Categories Section */}
-        <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Categories</Text>
-          <TouchableOpacity style={styles.seeAllButton}>
-            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-          </TouchableOpacity>
-        </View>
-
-        <View style={styles.categoriesGrid}>
-          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}>
-            <Ionicons name="medical" size={32} color="white" />
-            <Text style={styles.categoryText}>Medication</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}>
-            <Ionicons name="water" size={32} color="white" />
-            <Text style={styles.categoryText}>Hydration</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any)}>
-            <Ionicons name="notifications" size={32} color="white" />
-            <Text style={styles.categoryText}>Reminders</Text>
-          </TouchableOpacity>
-          
-          <TouchableOpacity style={styles.categoryCard}>
-            <Ionicons name="time" size={32} color="white" />
-            <Text style={styles.categoryText}>History</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Timeline Section */}
-        <View style={styles.sectionHeader}>
+        {/* Timeline Section (Sticky Header) */}
+        <View style={[styles.sectionHeader, styles.stickyHeader]}>
           <Text style={styles.sectionTitle}>Today&apos;s Timeline</Text>
         </View>
 
@@ -423,10 +545,10 @@ export default function Home() {
                       </View>
                     </View>
                     <View style={styles.timelineActivityRow}>
-                      <Ionicons 
-                        name={item.type === 'medication' ? 'medical' : 'water'} 
-                        size={18} 
-                        color="#FFFFFF" 
+                      <Ionicons
+                        name={getTypeIcon(item.type) as any}
+                        size={18}
+                        color="#FFFFFF"
                         style={styles.timelineIcon}
                       />
                       <Text style={styles.timelineActivity}>{item.title || 'Reminder'}</Text>
@@ -570,13 +692,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 20,
-    paddingBottom: 16,
+    paddingTop: 6,
+    paddingBottom: 6,
   },
   menuButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: 'white',
     justifyContent: 'center',
     alignItems: 'center',
@@ -587,9 +709,9 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   profileAvatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     backgroundColor: '#1E3A8A',
     justifyContent: 'center',
     alignItems: 'center',
@@ -634,13 +756,59 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#1F2937',
   },
+  searchClear: {
+    padding: 4,
+  },
+  suggestionsContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    marginTop: 8,
+    maxHeight: 300,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  suggestionsList: {
+    maxHeight: 300,
+  },
+  suggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  suggestionIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  suggestionContent: {
+    flex: 1,
+  },
+  suggestionName: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  suggestionDetails: {
+    fontSize: 13,
+    color: '#6B7280',
+  },
   statusCard: {
     backgroundColor: 'white',
     borderRadius: 16,
     padding: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -668,7 +836,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 8,
   },
   sectionTitle: {
     fontSize: 18,
@@ -682,7 +850,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 24,
+    marginBottom: 2,
   },
   categoryCard: {
     width: (width - 52) / 2,
@@ -707,8 +875,8 @@ const styles = StyleSheet.create({
   timelineCard: {
     backgroundColor: '#1E3A8A',
     borderRadius: 16,
-    padding: 20,
-    marginBottom: 24,
+    padding: 18,
+    marginBottom: 12,
     minHeight: 100,
   },
   timelineItem: {
@@ -772,16 +940,16 @@ const styles = StyleSheet.create({
   },
   timelineActivity: {
     color: '#FFFFFF',
-    fontSize: 17,
+    fontSize: 15,
     fontWeight: '600',
     flex: 1,
   },
   timelineBody: {
-    color: 'rgba(255, 255, 255, 0.85)',
-    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.9)',
+    fontSize: 13,
     marginTop: 2,
     marginLeft: 26,
-    lineHeight: 20,
+    lineHeight: 19,
   },
   timelineEmpty: {
     alignItems: 'center',
@@ -1107,5 +1275,19 @@ const styles = StyleSheet.create({
     color: 'white',
     fontSize: 14,
     fontWeight: '600',
+  },
+  // Pre-content wrapper to stabilize sticky header index
+  preContent: {
+    paddingTop: 0,
+  },
+  // Sticky header background
+  stickyHeader: {
+    backgroundColor: '#F8F9FA',
+  },
+  // Divider after Categories
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 4,
   },
 });

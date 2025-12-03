@@ -32,7 +32,7 @@ class AdminController extends Controller
 
         if (Auth::attempt($credentials)) {
             $user = Auth::user();
-            
+
             if ($user->role !== 'admin') {
                 Auth::logout();
                 return back()->withErrors(['email' => 'Access denied. Admin privileges required.']);
@@ -50,22 +50,22 @@ class AdminController extends Controller
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
-        
+
         return redirect()->route('admin.login')->with('status', 'Logged out successfully');
     }
 
     public function dashboard()
     {
         $users = User::take(5)->get();
-        
+
         // Calculate key metrics
         $totalUsers = User::where('role', '!=', 'admin')->count();
-        
+
         // DAU: Users who logged in today (using updated_at as proxy for last activity)
         $dau = User::where('role', '!=', 'admin')
             ->whereDate('updated_at', Carbon::today())
             ->count();
-        
+
         // MRR: Monthly Recurring Revenue from active premium subscriptions
         $mrr = Subscription::where('status', 'active')
             ->where('ends_at', '>', now())
@@ -75,29 +75,29 @@ class AdminController extends Controller
                 $plan = $subscription->plan;
                 if (!$plan) return 0;
                 // If billing period is monthly, use price as-is; if yearly, divide by 12
-                return $plan->billing_period === 'monthly' 
-                    ? $plan->price 
+                return $plan->billing_period === 'monthly'
+                    ? $plan->price
                     : ($plan->price / 12);
             });
-        
+
         // Premium Conversion Rate: % of users on paid plan
         $premiumUsers = User::where('role', '!=', 'admin')
             ->where(function ($query) {
                 $query->whereHas('activeSubscription', function ($q) {
                     $q->where('status', 'active')
-                      ->where('ends_at', '>', now());
+                        ->where('ends_at', '>', now());
                 })
-                ->orWhere(function ($q) {
-                    $q->whereNotNull('subscription_expires_at')
-                      ->where('subscription_expires_at', '>', now());
-                });
+                    ->orWhere(function ($q) {
+                        $q->whereNotNull('subscription_expires_at')
+                            ->where('subscription_expires_at', '>', now());
+                    });
             })
             ->count();
-        
-        $premiumConversionRate = $totalUsers > 0 
-            ? round(($premiumUsers / $totalUsers) * 100, 2) 
+
+        $premiumConversionRate = $totalUsers > 0
+            ? round(($premiumUsers / $totalUsers) * 100, 2)
             : 0;
-        
+
         // User Growth: Last 30 days
         $userGrowth = [];
         for ($i = 29; $i >= 0; $i--) {
@@ -110,7 +110,7 @@ class AdminController extends Controller
                 'users' => $count
             ];
         }
-        
+
         // Hydration Stats: Average water intake per day (last 30 days)
         $hydrationStats = [];
         for ($i = 29; $i >= 0; $i--) {
@@ -119,20 +119,20 @@ class AdminController extends Controller
                 ->sum('amount_ml');
             $entryCount = HydrationEntry::whereDate('created_at', $date)->count();
             $average = $entryCount > 0 ? round($totalAmount / $entryCount, 0) : 0;
-            
+
             $hydrationStats[] = [
                 'date' => $date->format('M j'),
                 'average' => $average
             ];
         }
-        
+
         // Platform Split: iOS vs Android (placeholder - using 50/50 for now)
         // TODO: Add platform tracking to users table
         $platformSplit = [
             ['platform' => 'iOS', 'count' => round($totalUsers * 0.5)],
             ['platform' => 'Android', 'count' => round($totalUsers * 0.5)]
         ];
-        
+
         return view('admin.dashboard', compact(
             'users',
             'totalUsers',
@@ -183,22 +183,26 @@ class AdminController extends Controller
         $totalHydrationEntries = HydrationEntry::where('user_id', $user->id)->count();
         $totalMedicationEntries = MedicationHistory::where('user_id', $user->id)->count();
         $totalNotifications = Notification::where('user_id', $user->id)->count();
-        
+
         // Get recent activity (last 7 days)
         $recentActivity = HydrationEntry::where('user_id', $user->id)
             ->where('created_at', '>=', Carbon::now()->subDays(7))
             ->count();
 
+        // Get subscription info
+        $currentSubscription = $user->subscriptions()->where('status', 'active')->with('plan')->first();
+
         return view('admin.users.show', compact(
-            'user', 
-            'hydrationEntries', 
-            'medications', 
-            'medicationHistory', 
+            'user',
+            'hydrationEntries',
+            'medications',
+            'medicationHistory',
             'notifications',
             'totalHydrationEntries',
             'totalMedicationEntries',
             'totalNotifications',
-            'recentActivity'
+            'recentActivity',
+            'currentSubscription'
         ));
     }
 
@@ -212,7 +216,7 @@ class AdminController extends Controller
         ]);
 
         $validated['password'] = Hash::make($validated['password']);
-        
+
         User::create($validated);
 
         return redirect()->route('admin.dashboard')->with('success', 'User created successfully');
@@ -220,7 +224,9 @@ class AdminController extends Controller
 
     public function editUser(User $user)
     {
-        return view('admin.users.edit', compact('user'));
+        $subscriptionPlans = SubscriptionPlan::where('is_active', true)->orderBy('price')->get();
+        $currentSubscription = $user->subscriptions()->where('status', 'active')->first();
+        return view('admin.users.edit', compact('user', 'subscriptionPlans', 'currentSubscription'));
     }
 
     public function updateUser(Request $request, User $user)
@@ -229,6 +235,8 @@ class AdminController extends Controller
             'name' => 'required|string|max:255',
             'email' => ['required', 'email', Rule::unique('users')->ignore($user->id)],
             'role' => 'required|in:user,admin',
+            'subscription_plan_id' => 'nullable|exists:subscription_plans,id',
+            'subscription_duration' => 'nullable|integer|min:1|max:365',
         ]);
 
         if ($request->filled('password')) {
@@ -237,6 +245,32 @@ class AdminController extends Controller
         }
 
         $user->update($validated);
+
+        // Handle subscription update
+        if ($request->filled('subscription_plan_id')) {
+            // Cancel existing active subscriptions
+            $user->subscriptions()->where('status', 'active')->update([
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+            ]);
+
+            // Create new subscription
+            $duration = $request->subscription_duration ?? 30; // Default 30 days
+            $user->subscriptions()->create([
+                'subscription_plan_id' => $request->subscription_plan_id,
+                'status' => 'active',
+                'starts_at' => now(),
+                'ends_at' => now()->addDays($duration),
+                'payment_method' => 'admin_grant',
+                'payment_reference' => 'Admin granted by ' . Auth::user()->name,
+            ]);
+        } elseif ($request->has('remove_subscription')) {
+            // Cancel active subscriptions if remove_subscription is checked
+            $user->subscriptions()->where('status', 'active')->update([
+                'status' => 'cancelled',
+                'cancelled_at' => now(),
+            ]);
+        }
 
         return redirect()->route('admin.dashboard')->with('success', 'User updated successfully');
     }
@@ -292,7 +326,7 @@ class AdminController extends Controller
                 $activeUsers = HydrationEntry::whereDate('created_at', $date)
                     ->distinct('user_id')
                     ->count('user_id');
-                
+
                 $userActivity[] = [
                     'date' => Carbon::now()->subDays($i)->format('M j'),
                     'active_users' => $activeUsers
@@ -307,7 +341,6 @@ class AdminController extends Controller
                 'medication_entries' => $medicationEntries,
                 'user_activity' => $userActivity
             ]);
-
         } catch (\Exception $e) {
             return response()->json([
                 'active_hydration_users' => 0,

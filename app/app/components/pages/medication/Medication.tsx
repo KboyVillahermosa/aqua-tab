@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, TextInput, Alert, Modal, Platform, KeyboardAvoidingView, TouchableWithoutFeedback, Keyboard, Animated, Linking } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
@@ -39,7 +40,8 @@ function uid() {
 }
 
 export default function Medication() {
-  const { token } = useLocalSearchParams();
+  const { token, medicineName, medicineDosage, medicineData } = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
   const [meds, setMeds] = useState<MedicationItem[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [modalVisible, setModalVisible] = useState(false);
@@ -50,6 +52,8 @@ export default function Medication() {
   const [subscription, setSubscription] = useState<any>(null);
   const [premiumLockVisible, setPremiumLockVisible] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
+  const [showMedicineSuggestions, setShowMedicineSuggestions] = useState(false);
 
   // form state
   const [name, setName] = useState('');
@@ -80,6 +84,29 @@ export default function Medication() {
   }, [timeModalVisible, MODAL_ANIM]);
   const [reminder, setReminder] = useState(true);
 
+  // Medicine autocomplete search
+  useEffect(() => {
+    const searchMedicines = async () => {
+      if (name.trim().length < 2) {
+        setMedicineSuggestions([]);
+        setShowMedicineSuggestions(false);
+        return;
+      }
+
+      try {
+        const response = await api.get(`/medicines/search?query=${encodeURIComponent(name)}`);
+        setMedicineSuggestions(response.medicines || []);
+        setShowMedicineSuggestions(true);
+      } catch (err) {
+        console.log('Medicine search error:', err);
+        setMedicineSuggestions([]);
+      }
+    };
+
+    const debounceTimer = setTimeout(searchMedicines, 300);
+    return () => clearTimeout(debounceTimer);
+  }, [name]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -89,32 +116,48 @@ export default function Medication() {
           const serverMeds: any[] = await api.get('/medications', token as string);
           setMeds(serverMeds || []);
 
-          // load histories for meds (simple approach)
-          const allHistory: HistoryEntry[] = [];
-          for (const m of serverMeds || []) {
-            try {
-              const h = await api.get(`/medications/${m.id}/history`, token as string);
-              (h || []).forEach((hh:any) => {
-                allHistory.push({ id: hh.id?.toString() || uid(), medId: m.id.toString(), time: hh.time, status: hh.status });
-              });
-            } catch {
-              // ignore per-med history errors
-            }
-          }
-          setHistory(allHistory);
+          // Load everything in parallel for better performance
+          const [historyResults, statsData, upcomingData, subscriptionData] = await Promise.allSettled([
+            // Load all medication histories in parallel
+            Promise.all((serverMeds || []).map(async (m) => {
+              try {
+                const h = await api.get(`/medications/${m.id}/history`, token as string);
+                return (h || []).map((hh: any) => ({
+                  id: hh.id?.toString() || uid(),
+                  medId: m.id.toString(),
+                  time: hh.time,
+                  status: hh.status
+                }));
+              } catch {
+                return [];
+              }
+            })),
+            // Load stats
+            api.get('/medications/stats', token as string),
+            // Load upcoming
+            api.get('/medications/upcoming', token as string),
+            // Load subscription
+            api.get('/subscription/current', token as string)
+          ]);
 
-          // Load stats and upcoming medications
-          try {
-            const statsData = await api.get('/medications/stats', token as string);
-            setStats(statsData || {
+          // Set history from parallel results
+          if (historyResults.status === 'fulfilled') {
+            const allHistory = historyResults.value.flat();
+            console.log('Initial history loaded:', allHistory.length, 'entries');
+            setHistory(allHistory);
+          } else {
+            console.log('Failed to load history:', historyResults.reason);
+          }
+
+          // Set stats
+          if (statsData.status === 'fulfilled') {
+            setStats(statsData.value || {
               total_medications: 0,
               active_medications: 0,
               completed_today: 0,
               missed_today: 0
             });
-          } catch (e) {
-            console.log('Failed to load stats:', e);
-            // Initialize with zeros if stats fail to load
+          } else {
             setStats({
               total_medications: 0,
               active_medications: 0,
@@ -123,19 +166,14 @@ export default function Medication() {
             });
           }
 
-          try {
-            const upcomingData = await api.get('/medications/upcoming', token as string);
-            setUpcoming(upcomingData || []);
-          } catch (e) {
-            console.log('Failed to load upcoming:', e);
+          // Set upcoming
+          if (upcomingData.status === 'fulfilled') {
+            setUpcoming(upcomingData.value || []);
           }
 
-          // Load subscription status
-          try {
-            const subscriptionData = await api.get('/subscription/current', token as string);
-            setSubscription(subscriptionData);
-          } catch (subErr) {
-            console.log('Error loading subscription:', subErr);
+          // Set subscription
+          if (subscriptionData.status === 'fulfilled') {
+            setSubscription(subscriptionData.value);
           }
         } else {
           const raw = await AsyncStorage.getItem(STORAGE_KEYS.MEDS);
@@ -158,6 +196,56 @@ export default function Medication() {
   useEffect(() => {
     AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history)).catch((e: any) => console.log(e));
   }, [history]);
+
+  // Handle medicine pre-fill from home search
+  useEffect(() => {
+    if (medicineName && !modalVisible) {
+      // Open add modal with pre-filled data
+      openAdd();
+      setName(medicineName as string);
+      if (medicineDosage) {
+        setDosage(medicineDosage as string);
+      }
+      if (medicineData) {
+        try {
+          const data = JSON.parse(medicineData as string);
+          if (data.description) setNotes(data.description);
+          // Set smart schedule based on frequency
+          if (data.frequency) {
+            const now = new Date();
+            const recommendedTimes: string[] = [];
+            
+            switch (data.frequency) {
+              case 'once_daily':
+                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                break;
+              case 'twice_daily':
+                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
+                break;
+              case 'three_times_daily':
+                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(14, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
+                break;
+              case 'four_times_daily':
+                recommendedTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(12, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(18, 0, 0, 0)).toISOString());
+                recommendedTimes.push(new Date(now.setHours(22, 0, 0, 0)).toISOString());
+                break;
+            }
+            
+            if (recommendedTimes.length > 0) {
+              setTimes(recommendedTimes);
+            }
+          }
+        } catch (e) {
+          console.log('Error parsing medicine data:', e);
+        }
+      }
+    }
+  }, [medicineName, medicineDosage, medicineData]);
 
   // Auto-mark missed medications and reload stats periodically
   useEffect(() => {
@@ -231,20 +319,7 @@ export default function Medication() {
     if (!name.trim()) return Alert.alert('Validation', 'Please enter a name');
     if (!times.length) return Alert.alert('Validation', 'Please add at least one reminder time');
     
-    const med: MedicationItem = editing ? { 
-      ...editing, 
-      name, 
-      dosage, 
-      times, 
-      reminder,
-      start_date: startDate,
-      end_date: endDate,
-      frequency,
-      days_of_week: daysOfWeek,
-      notes,
-      color
-    } : { 
-      id: uid(), 
+    const medData = {
       name, 
       dosage, 
       times, 
@@ -258,19 +333,50 @@ export default function Medication() {
     };
     
     if (editing) {
-      setMeds((s) => s.map((x) => (x.id === med.id ? med : x)));
+      // Update existing medication
+      const updatedMed: MedicationItem = { ...editing, ...medData };
+      setMeds((s) => s.map((x) => (x.id === updatedMed.id ? updatedMed : x)));
+      
       if (token) {
-        // update on server
-        await api.put(`/medications/${med.id}`, med, token as string).catch(()=>{});
-        // Schedule medication reminders
-        await scheduleMedicationReminders(med);
+        try {
+          await api.put(`/medications/${editing.id}`, medData, token as string);
+          // Schedule medication reminders
+          await scheduleMedicationReminders(updatedMed);
+          // Reload all data from server
+          await reloadAllData();
+        } catch (err) {
+          console.log('Failed to update on server:', err);
+          Alert.alert('Warning', 'Medication saved locally but failed to sync with server');
+        }
       }
     } else {
-      setMeds((s) => [med, ...s]);
+      // Create new medication
       if (token) {
-        await api.post('/medications', med, token as string).catch(()=>{});
-        // Schedule medication reminders
-        await scheduleMedicationReminders(med);
+        try {
+          // Save to server first to get proper ID
+          const serverMed = await api.post('/medications', medData, token as string);
+          const newMed: MedicationItem = {
+            id: serverMed.id.toString(),
+            ...medData
+          };
+          setMeds((s) => [newMed, ...s]);
+          // Schedule medication reminders
+          await scheduleMedicationReminders(newMed);
+          // Reload all data from server
+          await reloadAllData();
+        } catch (err: any) {
+          console.log('Failed to save to server:', err);
+          if (err?.status === 403 && err?.data?.limit_reached) {
+            Alert.alert('Limit Reached', err?.data?.message || 'Upgrade to add more medications');
+          } else {
+            Alert.alert('Error', 'Failed to save medication. Please try again.');
+          }
+          return;
+        }
+      } else {
+        // Offline mode - use local ID
+        const newMed: MedicationItem = { id: uid(), ...medData };
+        setMeds((s) => [newMed, ...s]);
       }
     }
     setModalVisible(false);
@@ -286,8 +392,6 @@ export default function Medication() {
     }
 
     try {
-      notificationService.setToken(token as string);
-      
       // Schedule notifications for each time
       await notificationService.scheduleMedicationNotifications(
         medication.id,
@@ -301,10 +405,96 @@ export default function Medication() {
     }
   }
 
+  async function reloadStatsAndUpcoming() {
+    if (!token) return;
+    try {
+      const [statsData, upcomingData] = await Promise.all([
+        api.get('/medications/stats', token as string),
+        api.get('/medications/upcoming', token as string)
+      ]);
+      setStats(statsData || {
+        total_medications: 0,
+        active_medications: 0,
+        completed_today: 0,
+        missed_today: 0
+      });
+      setUpcoming(upcomingData || []);
+    } catch (e) {
+      console.log('Failed to reload stats/upcoming:', e);
+    }
+  }
+
+  async function reloadAllData() {
+    if (!token) return;
+    try {
+      const [medsData, historyResults, statsData, upcomingData] = await Promise.allSettled([
+        api.get('/medications', token as string),
+        // Load histories
+        (async () => {
+          const serverMeds: any[] = await api.get('/medications', token as string);
+          console.log('Loading history for', serverMeds.length, 'medications');
+          return Promise.all((serverMeds || []).map(async (m) => {
+            try {
+              const h = await api.get(`/medications/${m.id}/history`, token as string);
+              console.log(`Medication ${m.id} (${m.name}): ${h.length} history entries`);
+              const entries = (h || []).map((hh: any) => ({
+                id: hh.id?.toString() || uid(),
+                medId: m.id.toString(),
+                time: hh.time,
+                status: hh.status
+              }));
+              return entries;
+            } catch (err) {
+              console.log(`Failed to load history for medication ${m.id}:`, err);
+              return [];
+            }
+          }));
+        })(),
+        api.get('/medications/stats', token as string),
+        api.get('/medications/upcoming', token as string)
+      ]);
+
+      // Update medications
+      if (medsData.status === 'fulfilled') {
+        setMeds(medsData.value || []);
+      }
+
+      // Update history
+      if (historyResults.status === 'fulfilled') {
+        const allHistory = historyResults.value.flat();
+        console.log('Reloaded history:', allHistory.length, 'entries');
+        console.log('Sample entries:', allHistory.slice(0, 3));
+        setHistory(allHistory);
+      } else {
+        console.log('Failed to reload history:', historyResults.reason);
+      }
+
+      // Update stats
+      if (statsData.status === 'fulfilled') {
+        setStats(statsData.value || {
+          total_medications: 0,
+          active_medications: 0,
+          completed_today: 0,
+          missed_today: 0
+        });
+      }
+
+      // Update upcoming
+      if (upcomingData.status === 'fulfilled') {
+        setUpcoming(upcomingData.value || []);
+      }
+    } catch (e) {
+      console.log('Failed to reload all data:', e);
+    }
+  }
+
   async function deleteMedication(id: string) {
     Alert.alert('Delete', 'Delete this medication?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
+        // Cancel notifications for this medication first
+        await notificationService.cancelMedicationNotifications(id);
+        
         // optimistic remove locally and persist immediately to storage
         const previous = meds;
         const newMeds = previous.filter((m) => m.id !== id);
@@ -318,13 +508,8 @@ export default function Medication() {
           return;
         }
         if (token) {
-          // Cancel notifications for this medication
-          await notificationService.cancelMedicationNotifications(id);
           // attempt server delete and keep UI in sync; encapsulated in helper
           await performServerDelete(id, previous, newMeds);
-        } else {
-          // Cancel notifications even if no token
-          await notificationService.cancelMedicationNotifications(id);
         }
       } },
     ]);
@@ -333,18 +518,30 @@ export default function Medication() {
   // Helper: attempt server deletion and provide richer error handling / retry
   async function performServerDelete(id: string, previous: MedicationItem[], newMeds: MedicationItem[]) {
     try {
-            await api.del(`/medications/${id}`, token as string);
-      const serverMeds: any[] = await api.get('/medications', token as string);
-      setMeds(serverMeds || []);
-      try { await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(serverMeds || [])); } catch {}
+      await api.del(`/medications/${id}`, token as string);
+      // Reload all data from server after successful deletion
+      await reloadAllData();
     } catch (err: any) {
-      // revert local state and persistent storage
+      const status = err?.status;
+      
+      // If medication doesn't exist on server (404), just keep local deletion
+      if (status === 404) {
+        console.log('Medication not found on server, keeping local deletion');
+        // Medication is already deleted locally, just sync with server to get fresh list
+        try {
+          await reloadAllData();
+        } catch {
+          // If can't sync with server, keep the local deletion
+          console.log('Could not sync with server after 404, keeping local state');
+        }
+        return;
+      }
+
+      // For other errors, revert and notify user
       setMeds(previous);
       try { await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(previous)); } catch {}
 
-      // our api wrapper throws { status, data }
       console.log('performServerDelete error raw:', err);
-      const status = err?.status;
       const data = err?.data;
       const serverMsg = (data && (data.message || (typeof data === 'string' ? data : JSON.stringify(data)))) || err?.message || 'Could not delete the medication on the server. Please try again.';
 
@@ -417,49 +614,41 @@ export default function Medication() {
       return;
     }
 
-    const entry: HistoryEntry = { id: uid(), medId, time: scheduledTime, status: 'completed' };
-    setHistory((h) => [entry, ...h]);
-    
-    // Cancel any pending notifications for this medication (temporarily disabled)
-    console.log('Notification cancellation temporarily disabled');
-    
+    // Save to server first, then reload all data
     if (token) {
       try {
-        const response = await api.post(`/medications/${medId}/history`, { status: 'completed', time: entry.time }, token as string);
-        // If response indicates it was updated (not created), reload history
-        if (response && response.id) {
-          // Reload history to get updated entry
-          const allHistory: HistoryEntry[] = [];
-          for (const m of meds) {
-            try {
-              const h = await api.get(`/medications/${m.id}/history`, token as string);
-              (h || []).forEach((hh:any) => {
-                allHistory.push({ id: hh.id?.toString() || uid(), medId: m.id.toString(), time: hh.time, status: hh.status });
-              });
-            } catch {
-              // ignore per-med history errors
-            }
-          }
-          setHistory(allHistory);
-        }
-        // Reload stats after marking as taken
-        try {
-          const statsData = await api.get('/medications/stats', token as string);
-          setStats(statsData);
-        } catch (e) {
-          console.log('Failed to reload stats:', e);
-        }
+        console.log('Marking medication as taken:', medId, 'at', scheduledTime);
+        const response = await api.post(`/medications/${medId}/history`, { status: 'completed', time: scheduledTime }, token as string);
+        console.log('Server response:', response);
+        // Reload all data after marking as taken
+        await reloadAllData();
+        console.log('Data reloaded after marking as taken');
       } catch (err: any) {
         console.log('Error marking medication as taken:', err);
+        console.log('Error details:', JSON.stringify(err, null, 2));
+        
         if (err?.status === 409) {
           // Duplicate entry
           Alert.alert('Already Logged', err?.data?.message || 'This medication has already been logged for this scheduled time.');
-          // Remove from local state
-          setHistory((h) => h.filter(e => e.id !== entry.id));
+        } else if (err?.status === 404) {
+          // Medication not found on server
+          Alert.alert('Error', 'This medication no longer exists on the server. Please refresh the page.');
+        } else if (err?.status === 401 || err?.status === 403) {
+          // Authentication error
+          Alert.alert('Authentication Error', 'Your session may have expired. Please log in again.');
+        } else if (err?.status === 408) {
+          // Timeout
+          Alert.alert('Request Timeout', 'The request took too long. Please check your internet connection and try again.');
+        } else if (err?.status >= 500) {
+          // Server error
+          Alert.alert('Server Error', 'The server encountered an error. Please try again later.');
+        } else if (!err?.status && err?.message === 'Network request failed') {
+          // Network error
+          Alert.alert('Network Error', 'Unable to connect to the server. Please check your internet connection.');
         } else {
-          Alert.alert('Error', 'Failed to save medication history. Please try again.');
-          // Remove from local state if server save failed
-          setHistory((h) => h.filter(e => e.id !== entry.id));
+          // Generic error with details
+          const errorMsg = err?.data?.message || err?.message || 'Unknown error occurred';
+          Alert.alert('Error', `Failed to save: ${errorMsg}`);
         }
       }
     }
@@ -623,7 +812,7 @@ export default function Medication() {
     <SafeAreaView style={styles.container}>
       <ScrollView 
         style={styles.scrollView} 
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingTop: (insets.top || 12) } ]}
         showsVerticalScrollIndicator={false}
       >
         {/* Header */}
@@ -759,41 +948,104 @@ export default function Medication() {
         </View>
 
         {/* Recent History */}
-        {history.length > 0 && (
-          <View style={styles.historySection}>
-            <View style={styles.historyHeader}>
+        <View style={styles.historySection}>
+          <View style={styles.historyHeader}>
+            <View>
               <Text style={styles.sectionTitle}>Recent History</Text>
+              <Text style={styles.historySubtitle}>
+                {subscription?.plan_slug === 'premium' ? 'Extended History (Up to 100 entries)' :
+                 subscription?.plan_slug === 'plus' ? '30 Most Recent Entries' :
+                 '10 Most Recent Entries'}
+              </Text>
+            </View>
+            {history.length > 0 && (
               <TouchableOpacity onPress={clearHistory}>
                 <Text style={styles.clearText}>Clear</Text>
               </TouchableOpacity>
-            </View>
-            
-            <View style={styles.historyList}>
-              {history.slice(0, 5).map((h) => (
-                <View key={h.id} style={styles.historyItem}>
-                  <View style={styles.historyLeft}>
-                    <Text style={styles.historyMed}>
-                      {meds.find(m => m.id === h.medId)?.name || 'Unknown'}
-                    </Text>
-                    <Text style={styles.historyTime}>
-                      {new Date(h.time).toLocaleDateString()} at {new Date(h.time).toLocaleTimeString([], { hour: 'numeric', hour12: true })}
-                    </Text>
-                  </View>
-                  <View style={styles.historyRight}>
-                    <View style={[
-                      styles.statusBadge, 
-                      h.status === 'completed' ? styles.statusCompleted : 
-                      h.status === 'snoozed' ? styles.statusSnoozed : 
-                      styles.statusSkipped
-                    ]}>
-                      <Text style={styles.statusText}>{h.status}</Text>
-                    </View>
-                  </View>
-                </View>
-              ))}
-            </View>
+            )}
           </View>
-        )}
+          
+          {(() => {
+            // Filter history: only show entries with valid medications
+            // Free users see last 10 entries, Plus sees last 30, Premium sees all
+            const validHistory = history.filter(h => {
+              const medExists = meds.find(m => m.id === h.medId);
+              return medExists;
+            });
+            
+            // Determine how many entries to show based on subscription
+            let entriesToShow = 10; // Free: 10 most recent entries
+            if (subscription?.plan_slug === 'plus') {
+              entriesToShow = 30; // Plus: 30 most recent entries
+            } else if (subscription?.plan_slug === 'premium') {
+              entriesToShow = 100; // Premium: 100 entries (effectively unlimited)
+            }
+            
+            const displayHistory = validHistory.slice(0, entriesToShow);
+            
+            if (displayHistory.length === 0) {
+              return (
+                <View style={styles.emptyHistoryState}>
+                  <Ionicons name="time-outline" size={48} color="#9CA3AF" />
+                  <Text style={styles.emptyHistoryText}>No recent history</Text>
+                  <Text style={styles.emptyHistorySubtext}>
+                    Your medication activity will appear here
+                  </Text>
+                </View>
+              );
+            }
+            
+            return (
+              <>
+                <View style={styles.historyList}>
+                  {displayHistory.map((h) => {
+                    const med = meds.find(m => m.id === h.medId);
+                    return (
+                      <View key={h.id} style={styles.historyItem}>
+                        <View style={styles.historyLeft}>
+                          <Text style={styles.historyMed}>
+                            {med?.name || 'Unknown Medication'}
+                          </Text>
+                          <Text style={styles.historyTime}>
+                            {new Date(h.time).toLocaleDateString()} at {new Date(h.time).toLocaleTimeString([], { hour: 'numeric', hour12: true })}
+                          </Text>
+                        </View>
+                        <View style={styles.historyRight}>
+                          <View style={[
+                            styles.statusBadge, 
+                            h.status === 'completed' ? styles.statusCompleted : 
+                            h.status === 'snoozed' ? styles.statusSnoozed : 
+                            styles.statusSkipped
+                          ]}>
+                            <Text style={styles.statusText}>{h.status}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+                
+                {!subscription || subscription?.plan_slug === 'free' ? (
+                  <TouchableOpacity 
+                    style={styles.upgradeHistoryButton}
+                    onPress={() => setPremiumLockVisible(true)}
+                  >
+                    <Ionicons name="lock-closed" size={16} color="#1E3A8A" />
+                    <Text style={styles.upgradeHistoryText}>Upgrade to PLUS+ to see 30 entries</Text>
+                  </TouchableOpacity>
+                ) : subscription?.plan_slug === 'plus' ? (
+                  <TouchableOpacity 
+                    style={styles.upgradeHistoryButton}
+                    onPress={() => setPremiumLockVisible(true)}
+                  >
+                    <Ionicons name="lock-closed" size={16} color="#1E3A8A" />
+                    <Text style={styles.upgradeHistoryText}>Upgrade to PREMIUM for extended history</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </>
+            );
+          })()}
+        </View>
       </ScrollView>
 
       <BottomNavigation currentRoute="medication" />
@@ -822,7 +1074,75 @@ export default function Medication() {
             <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
               <ScrollView contentContainerStyle={styles.modalBody} keyboardShouldPersistTaps="handled">
             <Text style={styles.label}>Name</Text>
-            <TextInput value={name} onChangeText={setName} style={styles.input} placeholder="e.g., Vitamin C" />
+            <View>
+              <TextInput 
+                value={name} 
+                onChangeText={setName} 
+                style={styles.input} 
+                placeholder="e.g., Vitamin C, Biogesic, Neozep" 
+                onFocus={() => name.length >= 2 && setShowMedicineSuggestions(true)}
+              />
+              
+              {/* Medicine Suggestions in Modal */}
+              {showMedicineSuggestions && medicineSuggestions.length > 0 && (
+                <View style={styles.modalSuggestionsContainer}>
+                  <ScrollView style={styles.modalSuggestionsList} nestedScrollEnabled>
+                    {medicineSuggestions.map((medicine) => (
+                      <TouchableOpacity
+                        key={medicine.id}
+                        style={styles.modalSuggestionItem}
+                        onPress={() => {
+                          setName(medicine.name);
+                          setDosage(medicine.dosage || dosage);
+                          setNotes(medicine.description || notes);
+                          setShowMedicineSuggestions(false);
+                          
+                          // Smart schedule based on dosage
+                          const dosageLower = (medicine.dosage || '').toLowerCase();
+                          const now = new Date();
+                          const smartTimes: string[] = [];
+                          
+                          if (dosageLower.includes('twice') || dosageLower.includes('2 times') || dosageLower.includes('every 12')) {
+                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
+                          } else if (dosageLower.includes('three times') || dosageLower.includes('3 times') || dosageLower.includes('every 8')) {
+                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(14, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(20, 0, 0, 0)).toISOString());
+                          } else if (dosageLower.includes('four times') || dosageLower.includes('4 times') || dosageLower.includes('every 6')) {
+                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(12, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(18, 0, 0, 0)).toISOString());
+                            smartTimes.push(new Date(now.setHours(22, 0, 0, 0)).toISOString());
+                          } else {
+                            // Default: once daily at 8 AM
+                            smartTimes.push(new Date(now.setHours(8, 0, 0, 0)).toISOString());
+                          }
+                          
+                          if (smartTimes.length > 0) {
+                            setTimes(smartTimes);
+                          }
+                        }}
+                      >
+                        <View style={styles.modalSuggestionIcon}>
+                          <Ionicons name="medical" size={18} color="#1E3A8A" />
+                        </View>
+                        <View style={styles.modalSuggestionContent}>
+                          <Text style={styles.modalSuggestionName}>{medicine.name}</Text>
+                          <Text style={styles.modalSuggestionDetails}>
+                            {medicine.generic_name || medicine.brand} • {medicine.category}
+                          </Text>
+                          {medicine.dosage && (
+                            <Text style={styles.modalSuggestionDosage}>💊 {medicine.dosage}</Text>
+                          )}
+                        </View>
+                        <Ionicons name="add-circle" size={20} color="#1E3A8A" />
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              )}
+            </View>
 
             <Text style={styles.label}>Dosage</Text>
             <TextInput value={dosage} onChangeText={setDosage} style={styles.input} placeholder="e.g., 500 mg" />
@@ -977,7 +1297,11 @@ export default function Medication() {
                     { backgroundColor: colorOption },
                     color === colorOption && styles.colorButtonActive
                   ]}
-                  onPress={() => setColor(colorOption)}
+                  onPress={() => {
+                    console.log('Color button pressed:', colorOption);
+                    setColor(colorOption);
+                  }}
+                  activeOpacity={0.7}
                 >
                   {color === colorOption && (
                     <Ionicons name="checkmark" size={16} color="white" />
@@ -1398,6 +1722,31 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 16, color: '#6B7280', marginTop: 12 },
   emptySubtext: { fontSize: 14, color: '#9CA3AF', marginTop: 4 },
   
+  // Empty History State
+  emptyHistoryState: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 40,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3
+  },
+  emptyHistoryText: { 
+    fontSize: 16, 
+    color: '#6B7280', 
+    marginTop: 12,
+    fontWeight: '600'
+  },
+  emptyHistorySubtext: { 
+    fontSize: 14, 
+    color: '#9CA3AF', 
+    marginTop: 4,
+    textAlign: 'center'
+  },
+  
   // History
   historySection: { 
     paddingHorizontal: 20, 
@@ -1409,6 +1758,11 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between', 
     alignItems: 'center', 
     marginBottom: 16 
+  },
+  historySubtitle: { 
+    fontSize: 12, 
+    color: '#6B7280', 
+    marginTop: 2 
   },
   historyList: {
     backgroundColor: 'white',
@@ -1441,6 +1795,22 @@ const styles = StyleSheet.create({
   statusSnoozed: { backgroundColor: '#FEF3C7' },
   statusSkipped: { backgroundColor: '#F3F4F6' },
   statusText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  upgradeHistoryButton: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    justifyContent: 'center', 
+    backgroundColor: '#EFF6FF', 
+    paddingVertical: 12, 
+    paddingHorizontal: 16, 
+    borderRadius: 10, 
+    marginTop: 12, 
+    gap: 8 
+  },
+  upgradeHistoryText: { 
+    color: '#1E3A8A', 
+    fontWeight: '600', 
+    fontSize: 13 
+  },
   
   // FAB
   fab: { 
@@ -1580,10 +1950,17 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 2,
+    borderWidth: 3,
     borderColor: 'transparent'
   },
-  colorButtonActive: { borderColor: '#1F2937' },
+  colorButtonActive: { 
+    borderColor: '#FFFFFF',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 4,
+    elevation: 5
+  },
   
   // Save Button
   saveBtn: { 
@@ -1599,6 +1976,60 @@ const styles = StyleSheet.create({
     elevation: 4
   },
   saveText: { color: 'white', fontWeight: '700', fontSize: 16 },
+  
+  // Medicine Suggestions in Modal
+  modalSuggestionsContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    marginTop: -8,
+    marginBottom: 8,
+    maxHeight: 250,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  modalSuggestionsList: {
+    maxHeight: 250,
+  },
+  modalSuggestionItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F3F4F6',
+  },
+  modalSuggestionIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 10,
+  },
+  modalSuggestionContent: {
+    flex: 1,
+  },
+  modalSuggestionName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginBottom: 2,
+  },
+  modalSuggestionDetails: {
+    fontSize: 12,
+    color: '#6B7280',
+    marginBottom: 2,
+  },
+  modalSuggestionDosage: {
+    fontSize: 11,
+    color: '#1E3A8A',
+    fontWeight: '500',
+  },
   
   // Time Picker Modal
   timeModalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)' },

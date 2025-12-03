@@ -3,7 +3,6 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextI
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { Audio } from 'expo-av';
 import * as api from './api';
 
 const { width, height } = Dimensions.get('window');
@@ -27,6 +26,8 @@ interface OnboardingData {
   notification_permissions_accepted?: boolean;
   battery_optimization_set?: boolean;
   emergency_contact?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
 }
 
 // Reminder tone options
@@ -55,8 +56,12 @@ export default function Onboarding() {
   const [timePickerField, setTimePickerField] = useState<string | null>(null);
   const [tempTime, setTempTime] = useState<Date>(new Date());
   
+  // Year and age picker states
+  const [showYearPicker, setShowYearPicker] = useState(false);
+  const [showAgePicker, setShowAgePicker] = useState(false);
+  const [showWeightPicker, setShowWeightPicker] = useState(false);
+  
   // Audio state
-  const [sound, setSound] = useState<Audio.Sound | null>(null);
   const [playingTone, setPlayingTone] = useState<string | null>(null);
 
   const steps = [
@@ -77,6 +82,12 @@ export default function Onboarding() {
     'complete'
   ];
 
+  // Generate arrays for pickers
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: currentYear - 1900 + 1 }, (_, i) => currentYear - i);
+  const ages = Array.from({ length: 120 }, (_, i) => i + 1);
+  const weights = Array.from({ length: 200 }, (_, i) => i + 20); // 20-219
+
   // Load saved data on mount
   useEffect(() => {
     const loadSavedData = async () => {
@@ -96,17 +107,26 @@ export default function Onboarding() {
     loadSavedData();
   }, [token]);
 
-  // Cleanup audio on unmount
-  useEffect(() => {
-    return () => {
-      if (sound) {
-        sound.unloadAsync();
-      }
-    };
-  }, [sound]);
-
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
+  };
+
+  const convertTo24HourFormat = (timeString?: string): string => {
+    if (!timeString) return '';
+    try {
+      const [time, period] = timeString.split(' ');
+      if (!period) return timeString; // Already 24-hour format
+      
+      const [hours, minutes] = time.split(':');
+      let hour = parseInt(hours);
+      
+      if (period.toUpperCase() === 'PM' && hour !== 12) hour += 12;
+      if (period.toUpperCase() === 'AM' && hour === 12) hour = 0;
+      
+      return `${hour.toString().padStart(2, '0')}:${minutes}`;
+    } catch {
+      return timeString;
+    }
   };
 
   const formatTime = (timeString?: string): string => {
@@ -200,13 +220,6 @@ export default function Onboarding() {
 
   const playTone = async (toneId: string) => {
     try {
-      // Stop any currently playing sound
-      if (sound) {
-        await sound.stopAsync();
-        await sound.unloadAsync();
-        setSound(null);
-      }
-
       const tone = REMINDER_TONES.find(t => t.id === toneId);
       if (!tone) {
         return;
@@ -214,32 +227,12 @@ export default function Onboarding() {
 
       setPlayingTone(toneId);
 
-      // If sound file exists, play it
-      if (tone.sound) {
-        try {
-          const { sound: newSound } = await Audio.Sound.createAsync(tone.sound, { shouldPlay: true });
-          setSound(newSound);
-
-          newSound.setOnPlaybackStatusUpdate((status) => {
-            if (status.isLoaded && status.didJustFinish) {
-              setPlayingTone(null);
-            }
-          });
-        } catch (error) {
-          console.log('Error loading sound file:', error);
-          // Fall through to system sound
-        }
-      }
-
-      // Use system notification sound as preview
-      // This will use the device's default notification sound
-      if (!tone.sound) {
-        // For preview, we'll use a simple beep pattern
-        // In production, you would add actual sound files to app/assets/sounds/
-        setTimeout(() => {
-          setPlayingTone(null);
-        }, 1000);
-      }
+      // For preview, we'll use a simple visual feedback
+      // In production, you would add actual sound files and use expo-audio
+      // Sound files would go to app/assets/sounds/ directory
+      setTimeout(() => {
+        setPlayingTone(null);
+      }, 1000);
     } catch (error) {
       console.log('Error playing tone:', error);
       setPlayingTone(null);
@@ -247,20 +240,32 @@ export default function Onboarding() {
   };
 
   const stopTone = async () => {
-    if (sound) {
-      await sound.stopAsync();
-      await sound.unloadAsync();
-      setSound(null);
-      setPlayingTone(null);
-    }
+    setPlayingTone(null);
   };
 
   const nextStep = async () => {
     if (currentStep < steps.length - 1) {
       // Save data to backend on certain steps
-      if (['nickname', 'profile', 'medication-time', 'wake-up', 'end-of-day', 'meal-times', 'climate', 'exercise', 'weight', 'age', 'reminder-tone'].includes(steps[currentStep])) {
+      if (['nickname', 'profile', 'emergency-contact', 'medication-time', 'wake-up', 'end-of-day', 'meal-times', 'climate', 'exercise', 'weight', 'age', 'reminder-tone'].includes(steps[currentStep])) {
         try {
-          await api.put('/onboarding/update', data, token);
+          // Convert time fields to 24-hour format for backend
+          const dataToSend = { ...data };
+          const timeFields: (keyof OnboardingData)[] = [
+            'first_medication_time',
+            'end_of_day_time',
+            'wake_up_time',
+            'breakfast_time',
+            'lunch_time',
+            'dinner_time',
+          ];
+          
+          timeFields.forEach(field => {
+            if (dataToSend[field]) {
+              dataToSend[field] = convertTo24HourFormat(dataToSend[field] as string) as any;
+            }
+          });
+          
+          await api.put('/onboarding/update', dataToSend, token);
         } catch (err) {
           console.log('Error saving onboarding data:', err);
         }
@@ -285,7 +290,24 @@ export default function Onboarding() {
       // Save any remaining data first
       if (Object.keys(data).length > 0) {
         try {
-          await api.put('/onboarding/update', data, token);
+          // Convert time fields to 24-hour format for backend
+          const dataToSend = { ...data };
+          const timeFields: (keyof OnboardingData)[] = [
+            'first_medication_time',
+            'end_of_day_time',
+            'wake_up_time',
+            'breakfast_time',
+            'lunch_time',
+            'dinner_time',
+          ];
+          
+          timeFields.forEach(field => {
+            if (dataToSend[field]) {
+              dataToSend[field] = convertTo24HourFormat(dataToSend[field] as string) as any;
+            }
+          });
+          
+          await api.put('/onboarding/update', dataToSend, token);
         } catch (updateErr) {
           console.log('Error updating onboarding data:', updateErr);
           // Continue even if update fails
@@ -373,28 +395,65 @@ export default function Onboarding() {
 
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Year of birth</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="2001"
-                placeholderTextColor="#8E8E93"
-                keyboardType="numeric"
-                value={data.year_of_birth ? data.year_of_birth.toString() : (data.age ? (new Date().getFullYear() - data.age).toString() : '')}
-                onChangeText={(text) => {
-                  const year = parseInt(text);
-                  if (text === '') {
-                    updateData('year_of_birth', undefined);
-                    updateData('age', undefined);
-                  } else if (year && year > 1900 && year <= new Date().getFullYear()) {
-                    updateData('year_of_birth', year);
-                    updateData('age', new Date().getFullYear() - year);
-                  }
-                }}
-              />
+              <TouchableOpacity onPress={() => setShowYearPicker(true)} style={styles.pickerButton}>
+                <Text style={[styles.pickerButtonText, !data.year_of_birth && styles.pickerPlaceholder]}>
+                  {data.year_of_birth || 'Select year'}
+                </Text>
+                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
 
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        );
+
+      case 'emergency-contact':
+        return (
+          <View style={styles.stepContainer}>
+            <View style={styles.iconContainer}>
+              <Text style={styles.emoji}>🆘</Text>
+            </View>
+            <Text style={styles.title}>Emergency Contact</Text>
+            <Text style={styles.description}>
+              In case of emergency, who should we contact?
+            </Text>
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="John Doe"
+                placeholderTextColor="#8E8E93"
+                value={data.emergency_contact_name || ''}
+                onChangeText={(text) => updateData('emergency_contact_name', text)}
+                autoFocus
+              />
+            </View>
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Phone Number</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="+63 912 345 6789"
+                placeholderTextColor="#8E8E93"
+                keyboardType="phone-pad"
+                value={data.emergency_contact_phone || ''}
+                onChangeText={(text) => updateData('emergency_contact_phone', text)}
+              />
+            </View>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -408,7 +467,7 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.first_medication_time && styles.timeInputPlaceholder]}>
                   {data.first_medication_time ? formatTime(data.first_medication_time) : '8:00 AM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
             <View style={styles.buttonRow}>
@@ -437,12 +496,17 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.wake_up_time && styles.timeInputPlaceholder]}>
                   {data.wake_up_time ? formatTime(data.wake_up_time) : '8:00 AM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -461,12 +525,17 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.end_of_day_time && styles.timeInputPlaceholder]}>
                   {data.end_of_day_time ? formatTime(data.end_of_day_time) : '11:00 PM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -485,7 +554,7 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.breakfast_time && styles.timeInputPlaceholder]}>
                   {data.breakfast_time ? formatTime(data.breakfast_time) : '8:30 AM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
@@ -494,7 +563,7 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.lunch_time && styles.timeInputPlaceholder]}>
                   {data.lunch_time ? formatTime(data.lunch_time) : '12:00 PM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
@@ -503,12 +572,17 @@ export default function Onboarding() {
                 <Text style={[styles.timeInputText, !data.dinner_time && styles.timeInputPlaceholder]}>
                   {data.dinner_time ? formatTime(data.dinner_time) : '7:00 PM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#6B7280" />
+                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -539,9 +613,14 @@ export default function Onboarding() {
                 </TouchableOpacity>
               ))}
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -570,9 +649,14 @@ export default function Onboarding() {
                 </Text>
               </TouchableOpacity>
             ))}
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -586,29 +670,41 @@ export default function Onboarding() {
             </View>
             <Text style={styles.title}>How much do you weigh?</Text>
             <View style={styles.fieldRow}>
-              <TextInput
-                style={[styles.input, { flex: 1 }]}
-                placeholder="60"
-                placeholderTextColor="#8E8E93"
-                keyboardType="numeric"
-                value={data.weight?.toString() || ''}
-                onChangeText={(text) => updateData('weight', parseFloat(text) || 0)}
-              />
+              <TouchableOpacity 
+                onPress={() => {
+                  // Set default unit to kg if not set
+                  if (!data.weight_unit) {
+                    updateData('weight_unit', 'kg');
+                  }
+                  setShowWeightPicker(true);
+                }} 
+                style={[styles.pickerButton, { flex: 1 }]}
+              >
+                <Text style={[styles.pickerButtonText, !data.weight && styles.pickerPlaceholder]}>
+                  {data.weight || 'Select weight'}
+                </Text>
+                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
               <View style={styles.unitSelector}>
                 {['kg', 'lbs'].map((unit) => (
                   <TouchableOpacity
                     key={unit}
-                    style={[styles.unitButton, data.weight_unit === unit && styles.unitButtonSelected]}
+                    style={[styles.unitButton, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitButtonSelected]}
                     onPress={() => updateData('weight_unit', unit)}
                   >
-                    <Text style={[styles.unitText, data.weight_unit === unit && styles.unitTextSelected]}>{unit}</Text>
+                    <Text style={[styles.unitText, (data.weight_unit === unit || (!data.weight_unit && unit === 'kg')) && styles.unitTextSelected]}>{unit}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -622,27 +718,21 @@ export default function Onboarding() {
             </View>
             <Text style={styles.title}>Choose your age</Text>
             <View style={styles.fieldRow}>
-              <TextInput
-                style={styles.input}
-                placeholder="21"
-                placeholderTextColor="#8E8E93"
-                keyboardType="numeric"
-                value={data.age?.toString() || ''}
-                onChangeText={(text) => {
-                  const age = parseInt(text);
-                  if (text === '') {
-                    updateData('age', undefined);
-                    updateData('year_of_birth', undefined);
-                  } else if (age && age > 0 && age < 150) {
-                    updateData('age', age);
-                    updateData('year_of_birth', new Date().getFullYear() - age);
-                  }
-                }}
-              />
+              <TouchableOpacity onPress={() => setShowAgePicker(true)} style={styles.pickerButton}>
+                <Text style={[styles.pickerButtonText, !data.age && styles.pickerPlaceholder]}>
+                  {data.age || 'Select age'}
+                </Text>
+                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Next</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Next</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -693,9 +783,14 @@ export default function Onboarding() {
             )}
             
             <Text style={styles.hintText}>Tap a tone to preview it. You can always change this later.</Text>
-            <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Continue</Text>
-            </TouchableOpacity>
+            <View style={styles.buttonRow}>
+              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
+                <Text style={styles.skipButtonText}>Skip</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
+                <Text style={styles.nextButtonText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
           </View>
         );
 
@@ -774,6 +869,8 @@ export default function Onboarding() {
                 is24Hour={false}
                 display="spinner"
                 onChange={handleTimeChange}
+                themeVariant="light"
+                accentColor="#1E3A8A"
                 style={styles.dateTimePicker}
               />
             </View>
@@ -791,6 +888,139 @@ export default function Onboarding() {
           onChange={handleTimeChange}
         />
       )}
+
+      {/* Year Picker Modal */}
+      <Modal
+        transparent
+        animationType="slide"
+        visible={showYearPicker}
+        onRequestClose={() => setShowYearPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowYearPicker(false)}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Select Year</Text>
+              <TouchableOpacity onPress={() => setShowYearPicker(false)}>
+                <Text style={styles.modalConfirm}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.pickerScrollView}>
+              {years.map((year) => (
+                <TouchableOpacity
+                  key={year}
+                  style={[
+                    styles.pickerItem,
+                    data.year_of_birth === year && styles.pickerItemSelected
+                  ]}
+                  onPress={() => {
+                    updateData('year_of_birth', year);
+                    setShowYearPicker(false);
+                  }}
+                >
+                  <Text style={[
+                    styles.pickerItemText,
+                    data.year_of_birth === year && styles.pickerItemTextSelected
+                  ]}>
+                    {year}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Age Picker Modal */}
+      <Modal
+        transparent
+        animationType="slide"
+        visible={showAgePicker}
+        onRequestClose={() => setShowAgePicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Select Age</Text>
+              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
+                <Text style={styles.modalConfirm}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.pickerScrollView}>
+              {ages.map((age) => (
+                <TouchableOpacity
+                  key={age}
+                  style={[
+                    styles.pickerItem,
+                    data.age === age && styles.pickerItemSelected
+                  ]}
+                  onPress={() => {
+                    updateData('age', age);
+                    updateData('year_of_birth', new Date().getFullYear() - age);
+                    setShowAgePicker(false);
+                  }}
+                >
+                  <Text style={[
+                    styles.pickerItemText,
+                    data.age === age && styles.pickerItemTextSelected
+                  ]}>
+                    {age}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Weight Picker Modal */}
+      <Modal
+        transparent
+        animationType="slide"
+        visible={showWeightPicker}
+        onRequestClose={() => setShowWeightPicker(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
+                <Text style={styles.modalCancel}>Cancel</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Select Weight</Text>
+              <TouchableOpacity onPress={() => setShowWeightPicker(false)}>
+                <Text style={styles.modalConfirm}>Done</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView style={styles.pickerScrollView}>
+              {weights.map((weight) => (
+                <TouchableOpacity
+                  key={weight}
+                  style={[
+                    styles.pickerItem,
+                    data.weight === weight && styles.pickerItemSelected
+                  ]}
+                  onPress={() => {
+                    updateData('weight', weight);
+                    setShowWeightPicker(false);
+                  }}
+                >
+                  <Text style={[
+                    styles.pickerItemText,
+                    data.weight === weight && styles.pickerItemTextSelected
+                  ]}>
+                    {weight}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -869,6 +1099,23 @@ const styles = StyleSheet.create({
     fontSize: 16,
   },
   timeInputPlaceholder: {
+    color: '#8E8E93',
+  },
+  pickerButton: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  pickerButtonText: {
+    color: '#1F2937',
+    fontSize: 16,
+  },
+  pickerPlaceholder: {
     color: '#8E8E93',
   },
   fieldRow: {
@@ -1106,6 +1353,7 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     paddingBottom: 40,
+    maxHeight: height * 0.6,
   },
   modalHeader: {
     flexDirection: 'row',
@@ -1131,5 +1379,26 @@ const styles = StyleSheet.create({
   },
   dateTimePicker: {
     height: 200,
+  },
+  // Picker modal styles
+  pickerScrollView: {
+    maxHeight: 300,
+  },
+  pickerItem: {
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+    alignItems: 'center',
+  },
+  pickerItemSelected: {
+    backgroundColor: '#EBF8FF',
+  },
+  pickerItemText: {
+    fontSize: 18,
+    color: '#1F2937',
+  },
+  pickerItemTextSelected: {
+    color: '#1E3A8A',
+    fontWeight: '600',
   },
 });

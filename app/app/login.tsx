@@ -123,15 +123,15 @@ export default function Login() {
           </TouchableOpacity>
         </View>
         
-        {/* Wave/Curve Bottom */}
+        {/* Diagonal Curve Bottom */}
         <Svg
-          height={80}
+          height={280}
           width={width}
           style={styles.wave}
-          viewBox={`0 0 ${width} 80`}
+          viewBox={`0 0 ${width} 280`}
         >
           <Path
-            d={`M0,0 L${width},0 L${width},40 Q${width*0.8},60 ${width*0.6},45 Q${width*0.4},30 ${width*0.2},50 Q${width*0.1},65 0,45 Z`}
+            d={`M0,0 L${width},0 L${width},30 Q${width*0.75},50 ${width*0.5},60 Q${width*0.25},70 0,80 Z`}
             fill="#1E3A8A"
           />
         </Svg>
@@ -141,7 +141,7 @@ export default function Login() {
       <View style={styles.contentCard}>
         {/* Title Section */}
         <View style={styles.titleSection}>
-          <Text style={styles.title}>Sign in</Text>
+          <Text style={styles.title}>Sign In</Text>
           <Text style={styles.subtitle}>Welcome back</Text>
         </View>
 
@@ -177,7 +177,10 @@ export default function Login() {
         </View>
 
         {/* Forgot Password Link */}
-        <TouchableOpacity style={styles.forgotPasswordContainer}>
+        <TouchableOpacity 
+          style={styles.forgotPasswordContainer}
+          onPress={() => router.push({ pathname: '/forgot-password' } as any)}
+        >
           <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
         </TouchableOpacity>
 
@@ -186,7 +189,7 @@ export default function Login() {
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.signInButtonText}>Sign in</Text>
+            <Text style={styles.signInButtonText}>Sign In</Text>
           )}
         </TouchableOpacity>
 

@@ -1,17 +1,10 @@
 <!doctype html>
 <html lang="en">
-<<<<<<< HEAD
-=======
-<head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>@yield('title', 'AQUATAB ADMIN')</title>
->>>>>>> 791b0041ee0407c9e584f30173364fb1b8c0d7ca
 
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>@yield('title', 'Aqua Admin')</title>
+  <title>@yield('title', 'AQUATAB ADMIN')</title>
 
   {{-- Tailwind CDN for quick admin styling (no npm required) --}}
   <script>
@@ -77,7 +70,7 @@
 
   {{-- Alpine.js for simple toggle (CDN) --}}
   <script src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
-  
+
   {{-- Stack for page-specific scripts --}}
   @stack('scripts')
 </body>

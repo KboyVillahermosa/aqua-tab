@@ -6,6 +6,9 @@ use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Password;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Auth\Events\PasswordReset;
 
 class AuthController extends Controller
 {
@@ -36,7 +39,7 @@ class AuthController extends Controller
         $user->forceFill(['api_token' => hash('sha256', $token)])->save();
 
         return response()->json([
-            'token' => $token, 
+            'token' => $token,
             'user' => $user,
             'onboarding_completed' => $user->onboarding_completed,
         ], 201);
@@ -59,7 +62,7 @@ class AuthController extends Controller
         $user->forceFill(['api_token' => hash('sha256', $token)])->save();
 
         return response()->json([
-            'token' => $token, 
+            'token' => $token,
             'user' => $user,
             'onboarding_completed' => $user->onboarding_completed,
         ]);
@@ -77,5 +80,97 @@ class AuthController extends Controller
     public function me(Request $request)
     {
         return response()->json($request->user());
+    }
+
+    public function forgotPassword(Request $request)
+    {
+        $request->validate(['email' => 'required|email']);
+
+        // Check if user exists
+        $user = User::where('email', $request->email)->first();
+        if (!$user) {
+            return response()->json([
+                'message' => 'If an account exists with this email, you will receive a reset code.'
+            ]);
+        }
+
+        // Generate a 6-digit OTP code
+        $code = rand(100000, 999999);
+
+        // Save the code to database (hashed for security)
+        DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $request->email],
+            [
+                'token' => Hash::make($code),
+                'created_at' => now()
+            ]
+        );
+
+        // In production, you would send this via email
+        // Mail::to($user->email)->send(new ResetPasswordMail($code));
+
+        return response()->json([
+            'message' => 'Verification code sent to your email.',
+            'status' => 'success',
+            // ⚠️ DEV MODE: Remove this line in production!
+            'debug_otp' => $code
+        ]);
+    }
+
+    public function resetPassword(Request $request)
+    {
+        $request->validate([
+            'email' => 'required|email',
+            'code' => 'required|string',
+            'password' => 'required|min:6|confirmed',
+        ]);
+
+        // Find the reset token entry
+        $resetEntry = DB::table('password_reset_tokens')
+            ->where('email', $request->email)
+            ->first();
+
+        if (!$resetEntry) {
+            return response()->json([
+                'message' => 'Invalid or expired reset code.'
+            ], 400);
+        }
+
+        // Verify the code
+        if (!Hash::check($request->code, $resetEntry->token)) {
+            return response()->json([
+                'message' => 'Invalid reset code.'
+            ], 400);
+        }
+
+        // Check if the token is expired (15 minutes)
+        if (now()->diffInMinutes($resetEntry->created_at) > 15) {
+            return response()->json([
+                'message' => 'Reset code has expired. Please request a new one.'
+            ], 400);
+        }
+
+        // Update user password
+        $user = User::where('email', $request->email)->first();
+        if (!$user) {
+            return response()->json([
+                'message' => 'User not found.'
+            ], 404);
+        }
+
+        $user->forceFill([
+            'password' => $request->password,
+        ])->save();
+
+        // Delete the reset token
+        DB::table('password_reset_tokens')
+            ->where('email', $request->email)
+            ->delete();
+
+        event(new PasswordReset($user));
+
+        return response()->json([
+            'message' => 'Password has been reset successfully.'
+        ]);
     }
 }

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, Alert, SafeAreaView, ScrollView, Animated, Easing, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams } from 'expo-router';
 import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -11,6 +12,7 @@ import { notificationService } from '../../../services/notificationService';
 
 export default function Hydration() {
   const { token } = useLocalSearchParams();
+  const insets = useSafeAreaInsets();
   const [goal, setGoal] = useState<number>(2000);
   const [idealGoal, setIdealGoal] = useState<number | null>(null);
   const [entries, setEntries] = useState<any[]>([]);
@@ -312,7 +314,7 @@ export default function Hydration() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 160 }]}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingBottom: 160, paddingTop: (insets.top || 12) }]}>
         <View style={styles.headerRowAlt}>
           <View>
             <Text style={styles.title}>Hydration</Text>

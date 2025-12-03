@@ -1,8 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import api from '../../../api';
+import EditProfileModal from './EditProfileModal';
+import ProfileInfoList from './ProfileInfoList';
+import useUser from '../../../hooks/useUser';
+import { useSafeAreaInsets, SafeAreaView } from 'react-native-safe-area-context';
 
 interface UserDetails {
   name: string;
@@ -12,6 +15,7 @@ interface UserDetails {
   gender?: string;
   address?: string;
   nickname?: string;
+  emergency_contact?: string;
   first_medication_time?: string;
   end_of_day_time?: string;
   wake_up_time?: string;
@@ -31,23 +35,21 @@ interface UserDetails {
 export default function ProfileDetails() {
   const router = useRouter();
   const { token } = useLocalSearchParams();
-  const [user, setUser] = useState<UserDetails | null>(null);
-  const [loading, setLoading] = useState(true);
+  const { user: fetchedUser, setUser: setFetchedUser, loading } = useUser(token as string | undefined);
+  const insets = useSafeAreaInsets();
 
-  useEffect(() => {
-    loadUserData();
-  }, []);
+  // local alias to satisfy existing code that used `user`
+  const user = fetchedUser as unknown as UserDetails | null;
 
-  async function loadUserData() {
-    try {
-      const userData = await api.get('/me', token as string);
-      setUser(userData);
-    } catch (err: any) {
-      console.log('Error loading user data:', err);
-    } finally {
-      setLoading(false);
-    }
-  }
+  const [modalVisible, setModalVisible] = React.useState(false);
+
+  const openEditModal = () => setModalVisible(true);
+  const closeEditModal = () => setModalVisible(false);
+
+  const handleSaved = (updated: any) => {
+    // update shared user state
+    setFetchedUser((prev: any) => ({ ...(prev || {}), ...(updated || {}) }));
+  };
 
   const formatTime = (time: string | undefined) => {
     if (!time) return 'Not set';
@@ -79,7 +81,7 @@ export default function ProfileDetails() {
 
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#1E3A8A" />
         </View>
@@ -89,7 +91,7 @@ export default function ProfileDetails() {
 
   if (!user) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={styles.container} edges={['top']}>
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>Failed to load profile details</Text>
         </View>
@@ -98,61 +100,44 @@ export default function ProfileDetails() {
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Header */}
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#1F2937" />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Profile Details</Text>
-          <View style={styles.backButton} />
+          <TouchableOpacity style={styles.backButton} onPress={openEditModal}>
+            <Ionicons name="create-outline" size={24} color="#1E3A8A" />
+          </TouchableOpacity>
         </View>
 
         {/* Personal Information Section */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Personal Information</Text>
-          <View style={styles.card}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Full Name</Text>
-              <Text style={styles.infoValue}>{user.name || 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Nickname</Text>
-              <Text style={styles.infoValue}>{user.nickname || 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Email</Text>
-              <Text style={styles.infoValue}>{user.email || 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Phone</Text>
-              <Text style={styles.infoValue}>{user.phone || 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Gender</Text>
-              <Text style={styles.infoValue}>{formatGender(user.gender)}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Date of Birth</Text>
-              <Text style={styles.infoValue}>{user.date_of_birth || 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Age</Text>
-              <Text style={styles.infoValue}>{user.age ? `${user.age} years old` : 'Not set'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Address</Text>
-              <Text style={styles.infoValue}>{user.address || 'Not set'}</Text>
-            </View>
-          </View>
+          <ProfileInfoList
+            sections={[
+              {
+                rows: [
+                { label: 'Full Name', value: user.name },
+                { label: 'Nickname', value: user.nickname },
+                { label: 'Email', value: user.email },
+                { label: 'Phone', value: user.phone },
+                { label: 'Gender', value: formatGender(user.gender) },
+                { label: 'Date of Birth', value: user.date_of_birth },
+                { label: 'Age', value: user.age ? `${user.age} years old` : null },
+                { label: 'Address', value: user.address },
+                { label: 'Emergency Contact', value: user.emergency_contact },
+              ],
+            },
+          ]}
+        />
         </View>
 
         {/* Health Information Section */}
@@ -273,6 +258,14 @@ export default function ProfileDetails() {
 
         <View style={styles.bottomSpacing} />
       </ScrollView>
+
+      <EditProfileModal
+        visible={modalVisible}
+        onClose={closeEditModal}
+        user={user}
+        token={token as string}
+        onSaved={handleSaved}
+      />
     </SafeAreaView>
   );
 }
@@ -350,12 +343,13 @@ const styles = StyleSheet.create({
   infoRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     paddingVertical: 12,
   },
   infoContent: {
     flex: 1,
     marginLeft: 12,
+    flexShrink: 1,
   },
   icon: {
     marginRight: 8,
@@ -364,13 +358,16 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#6B7280',
     fontWeight: '500',
+    flex: 0.5,
+    marginRight: 8,
   },
   infoValue: {
     fontSize: 14,
     color: '#1F2937',
     fontWeight: '600',
     textAlign: 'right',
-    flex: 1,
+    flex: 0.5,
+    flexWrap: 'wrap',
   },
   divider: {
     height: 1,
@@ -388,6 +385,106 @@ const styles = StyleSheet.create({
   },
   bottomSpacing: {
     height: 40,
+  },
+  scrollContent: {
+    paddingBottom: 56,
+  },
+  modalContainer: {
+    flex: 1,
+    backgroundColor: '#F8F9FA',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 16,
+    backgroundColor: 'white',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E5E7EB',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1F2937',
+  },
+  modalCancelButton: {
+    fontSize: 16,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+  modalSaveButton: {
+    fontSize: 16,
+    color: '#1E3A8A',
+    fontWeight: '600',
+  },
+  modalContent: {
+    flex: 1,
+    padding: 20,
+  },
+  formGroup: {
+    marginBottom: 20,
+  },
+  formLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#374151',
+    marginBottom: 8,
+  },
+  input: {
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#D1D5DB',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    fontSize: 16,
+    color: '#1F2937',
+  },
+  textArea: {
+    textAlignVertical: 'top',
+    paddingTop: 12,
+  },
+  profilePictureSection: {
+    alignItems: 'center',
+    marginBottom: 24,
+    paddingTop: 20,
+  },
+  profilePictureContainer: {
+    position: 'relative',
+    marginBottom: 12,
+  },
+  profileImage: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#E5E7EB',
+  },
+  profileImagePlaceholder: {
+    width: 100,
+    height: 100,
+    borderRadius: 50,
+    backgroundColor: '#F3F4F6',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#E5E7EB',
+  },
+  cameraButton: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#1E3A8A',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+    elevation: 5,
   },
 });
 

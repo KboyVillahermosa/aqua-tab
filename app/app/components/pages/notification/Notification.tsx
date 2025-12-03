@@ -1,598 +1,731 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  SafeAreaView,
+  ScrollView,
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  RefreshControl,
+  Switch,
+  ActivityIndicator,
+  Alert,
+  Modal,
+} from 'react-native';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as Notifications from 'expo-notifications';
+import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import BottomNavigation from '../../navigation/BottomNavigation';
-import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
-import { notificationService } from '../../../services/notificationService';
 
-// Configure notification behavior (temporarily disabled)
-// Notifications.setNotificationHandler({
-//   handleNotification: async () => ({
-//     shouldShowAlert: true,
-//     shouldPlaySound: true,
-//     shouldSetBadge: false,
-//     shouldShowBanner: true,
-//     shouldShowList: true,
-//   }),
-// });
+import BottomNavigation from '../../navigation/BottomNavigation';
+import api from '../../../api';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-type NotificationItem = {
-  id: string;
-  type: 'hydration' | 'medication';
+// Types
+export type NotificationStatus = 'upcoming' | 'completed' | 'missed' | 'snoozed' | 'delivered' | 'scheduled';
+export type NotificationType = 'hydration' | 'medication' | 'general';
+
+export interface NotificationItem {
+  id: number | string;
   title: string;
-  body: string;
-  scheduled_time: string;
-  status: 'scheduled' | 'delivered' | 'missed' | 'completed';
-  data?: any;
-  reminderId?: string;
-};
+  message?: string;
+  body?: string;
+  type: NotificationType;
+  status: NotificationStatus;
+  scheduled_at?: string | null;
+  scheduled_time?: string | null; // sometimes used by backend
+  created_at?: string | null;
+}
 
-type ReminderSettings = {
-  hydration: {
-    enabled: boolean;
-    interval: number; // minutes
-    startTime: string; // HH:MM format
-    endTime: string; // HH:MM format
-    lastReminder: string;
-  };
-  medication: {
-    enabled: boolean;
-    snoozeMinutes: number[];
-    missedThreshold: number; // minutes
-  };
-};
+export interface NotificationStats {
+  completed: number;
+  upcoming: number; // aka scheduled
+  missed: number;
+}
 
 const STORAGE_KEYS = {
-  NOTIFICATIONS: '@aqua:notifications',
-  REMINDER_SETTINGS: '@aqua:reminder_settings',
-};
-
-// function uid() {
-//   return Math.random().toString(36).slice(2, 9);
-// }
+  PUSH_TOKEN: 'push_token',
+  PERMISSION_SWITCH: 'permission_switch',
+} as const;
 
 export default function Notification() {
-  const { token } = useLocalSearchParams();
+  const params = useLocalSearchParams();
+  const token = (params?.token as string) || undefined;
+  const insets = useSafeAreaInsets();
+
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [reminderSettings, setReminderSettings] = useState<ReminderSettings>({
-    hydration: {
-      enabled: true,
-      interval: 120, // 2 hours
-      startTime: '08:00',
-      endTime: '22:00',
-      lastReminder: '',
-    },
-    medication: {
-      enabled: true,
-      snoozeMinutes: [15, 30, 60],
-      missedThreshold: 30,
-    },
-  });
-  const [loading, setLoading] = useState(true);
-  const [permissionGranted, setPermissionGranted] = useState(false);
+  const [stats, setStats] = useState<NotificationStats>({ completed: 0, upcoming: 0, missed: 0 });
+  const [permissionGranted, setPermissionGranted] = useState<boolean>(false);
+  const [permissionSwitch, setPermissionSwitch] = useState<boolean>(false);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [hydrationInterval, setHydrationInterval] = useState<number>(30);
+  const [hydrationAmount, setHydrationAmount] = useState<number>(200);
+  const [showHydrationPicker, setShowHydrationPicker] = useState<boolean>(false);
 
-
-  useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEYS.NOTIFICATIONS, JSON.stringify(notifications));
-  }, [notifications]);
-
-  useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEYS.REMINDER_SETTINGS, JSON.stringify(reminderSettings));
-  }, [reminderSettings]);
-
-  const loadNotifications = useCallback(async () => {
-    try {
-      setLoading(true);
-      
-      if (token) {
-        // Load from backend
-        try {
-          const serverNotifications = await api.get('/notifications', token as string);
-          // Transform backend format to frontend format
-          const transformed = (serverNotifications || []).map((n: any) => ({
-            id: n.id?.toString() || '',
-            type: n.type,
-            title: n.title,
-            body: n.body,
-            scheduled_time: n.scheduled_time,
-            status: n.status,
-            data: typeof n.data === 'string' ? JSON.parse(n.data || '{}') : n.data,
-          }));
-          setNotifications(transformed);
-        } catch (e) {
-          console.log('Failed to load notifications from server:', e);
-        }
-      } else {
-        // Load from local storage
-        const raw = await AsyncStorage.getItem(STORAGE_KEYS.NOTIFICATIONS);
-        if (raw) setNotifications(JSON.parse(raw));
-      }
-
-      // Load reminder settings
-      const settingsRaw = await AsyncStorage.getItem(STORAGE_KEYS.REMINDER_SETTINGS);
-      if (settingsRaw) {
-        setReminderSettings(JSON.parse(settingsRaw));
-      }
-    } catch (e) {
-      console.log('Failed to load notifications:', e);
-    } finally {
-      setLoading(false);
+  // Helpers
+  const getStatusColor = useCallback((status: NotificationStatus) => {
+    switch (status) {
+      case 'completed':
+        return '#10B981';
+      case 'missed':
+        return '#EF4444';
+      case 'snoozed':
+        return '#F59E0B';
+      case 'delivered':
+        return '#3B82F6';
+      default:
+        return '#3B82F6';
     }
-  }, [token]);
-
-  const registerForPushNotificationsAsync = useCallback(async () => {
-    try {
-      notificationService.setToken(token as string || null);
-      const granted = await notificationService.requestPermissions();
-      setPermissionGranted(granted);
-      return granted;
-    } catch (error) {
-      console.error('Error requesting notification permissions:', error);
-      setPermissionGranted(false);
-      return false;
-    }
-  }, [token]);
-
-  const handleHydrationReminderResponse = useCallback((response: Notifications.NotificationResponse) => {
-    const data = response.notification.request.content.data as any;
-    const notificationId = data?.id ? String(data.id) : '';
-    Alert.alert(
-      'Hydration Reminder',
-      'Did you drink water?',
-      [
-        { text: 'Snooze', onPress: () => snoozeHydrationReminder(notificationId) },
-        { text: 'Mark Complete', onPress: () => markHydrationCompleted(notificationId) },
-        { text: 'Later', style: 'cancel' },
-      ]
-    );
   }, []);
 
-  const handleMedicationReminderResponse = useCallback((response: Notifications.NotificationResponse) => {
-    const data = response.notification.request.content.data as any;
-    const notificationId = data?.id ? String(data.id) : '';
-    Alert.alert(
-      'Medication Reminder',
-      'Did you take your medication?',
-      [
-        { text: 'Snooze', onPress: () => snoozeMedicationReminder(notificationId, 15) },
-        { text: 'Mark Taken', onPress: () => markMedicationTaken(notificationId) },
-        { text: 'Later', style: 'cancel' },
-      ]
-    );
+  const getStatusBg = useCallback((status: NotificationStatus) => `${getStatusColor(status)}20`, [getStatusColor]);
+
+  const getStatusText = useCallback((status: NotificationStatus) => {
+    switch (status) {
+      case 'completed':
+        return 'Completed';
+      case 'missed':
+        return 'Missed';
+      case 'snoozed':
+        return 'Snoozed';
+      case 'delivered':
+        return 'Delivered';
+      case 'scheduled':
+        return 'Upcoming';
+      default:
+        return 'Upcoming';
+    }
   }, []);
 
-  const setupNotificationListeners = useCallback(() => {
-    const cleanup = notificationService.setupNotificationHandlers(
-      (notification) => {
-        console.log('Notification received:', notification);
-        // Reload notifications when a new one is received
-        loadNotifications();
-      },
-      (response) => {
-        console.log('Notification tapped:', response);
-        const data = response.notification.request.content.data as any;
-        
-        // Handle different notification types
-        if (data?.type === 'hydration') {
-          handleHydrationReminderResponse(response);
-        } else if (data?.type === 'medication') {
-          handleMedicationReminderResponse(response);
-        }
-      }
-    );
+  const getNotificationIcon = useCallback((type: NotificationType) => {
+    switch (type) {
+      case 'hydration':
+        return 'water-outline' as const;
+      case 'medication':
+        return 'medkit-outline' as const;
+      default:
+        return 'notifications-outline' as const;
+    }
+  }, []);
 
-    return cleanup;
-  }, [loadNotifications, handleHydrationReminderResponse, handleMedicationReminderResponse]);
+  const formatTime = (iso?: string | null) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    const h = d.getHours();
+    const m = d.getMinutes().toString().padStart(2, '0');
+    const ampm = h >= 12 ? 'PM' : 'AM';
+    const hour = h % 12 || 12;
+    return `${hour}:${m} ${ampm}`;
+  };
 
-  useEffect(() => {
-    registerForPushNotificationsAsync();
-    loadNotifications();
-    const cleanup = setupNotificationListeners();
-    
-    return () => {
-      if (cleanup) cleanup();
+  const formatDate = (iso?: string | null) => {
+    if (!iso) return '';
+    return new Date(iso).toLocaleDateString();
+  };
+
+  // API adapters to accept array or {data: array}
+  const normalizeList = useCallback((payload: any): NotificationItem[] => {
+    const arr = Array.isArray(payload) ? payload : payload?.data;
+    if (!Array.isArray(arr)) return [];
+    // Deduplicate by id
+    const seen = new Set<string | number>();
+    const unique: NotificationItem[] = [];
+    for (const raw of arr) {
+      const id = raw?.id ?? `${raw?.type}-${raw?.scheduled_at || raw?.scheduled_time || raw?.created_at || Math.random()}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      unique.push({
+        id,
+        title: raw?.title ?? 'Notification',
+        message: raw?.message ?? raw?.body ?? '',
+        body: raw?.body,
+        type: (raw?.type ?? 'general') as NotificationType,
+        status: (raw?.status ?? 'scheduled') as NotificationStatus,
+        scheduled_at: raw?.scheduled_at ?? null,
+        scheduled_time: raw?.scheduled_time ?? null,
+        created_at: raw?.created_at ?? null,
+      });
+    }
+    return unique;
+  }, []);
+
+  const normalizeStats = useCallback((payload: any): NotificationStats => {
+    const s = payload?.data ?? payload ?? {};
+    const upcoming = Number(s?.upcoming ?? s?.scheduled ?? 0) || 0;
+    return {
+      completed: Number(s?.completed ?? 0) || 0,
+      upcoming,
+      missed: Number(s?.missed ?? 0) || 0,
     };
-  }, [loadNotifications, setupNotificationListeners, registerForPushNotificationsAsync]);
+  }, []);
 
-  async function scheduleHydrationReminder() {
-    if (!permissionGranted) {
-      Alert.alert('Permissions Required', 'Please enable notification permissions first.');
-      return;
-    }
-
+  const loadPermissions = useCallback(async () => {
     try {
-      const interval = reminderSettings.hydration.interval || 120;
-      const amountMl = 200; // Default amount
-      
-      await notificationService.scheduleHydrationReminder(interval, amountMl);
-      
-      Alert.alert('Success', 'Hydration reminder scheduled!');
-      loadNotifications();
-    } catch (error) {
-      console.error('Error scheduling hydration reminder:', error);
-      Alert.alert('Error', 'Failed to schedule hydration reminder');
-    }
-  }
+      const storedSwitch = await AsyncStorage.getItem(STORAGE_KEYS.PERMISSION_SWITCH);
+      if (storedSwitch !== null) setPermissionSwitch(storedSwitch === 'true');
+      const settings = await Notifications.getPermissionsAsync();
+      const granted = settings.status === 'granted' || (settings as any).granted;
+      setPermissionGranted(granted);
+      if (storedSwitch === null) setPermissionSwitch(granted);
+    } catch (_) {}
+  }, []);
 
-  async function markHydrationCompleted(notificationId: string) {
-    if (!token) return;
-
+  const fetchNotifications = useCallback(async () => {
     try {
-      await notificationService.markCompleted(notificationId);
-      if (token) {
-        await api.post(`/notifications/${notificationId}/complete`, {}, token as string);
+      const res = await api.get('/notifications', token);
+      const list = normalizeList(res);
+      setNotifications(list);
+    } catch (_) {
+      setNotifications([]);
+    }
+  }, [normalizeList, token]);
+
+  const fetchStats = useCallback(async () => {
+    try {
+      const res = await api.get('/notifications/stats', token);
+      setStats(normalizeStats(res));
+    } catch (_) {
+      setStats({ completed: 0, upcoming: 0, missed: 0 });
+    }
+  }, [normalizeStats, token]);
+
+  const initialLoad = useCallback(async () => {
+    setLoading(true);
+    await loadPermissions();
+    await Promise.all([fetchNotifications(), fetchStats()]);
+    setLoading(false);
+  }, [fetchNotifications, fetchStats, loadPermissions]);
+
+  useEffect(() => {
+    initialLoad();
+  }, [initialLoad]);
+
+  // Permission toggle handling
+  const registerForPushNotifications = useCallback(async () => {
+    try {
+      const isExpoGo = Constants.appOwnership === 'expo' || (Constants as any).executionEnvironment === 'storeClient';
+      if (isExpoGo) {
+        setPermissionGranted(true);
+        await AsyncStorage.setItem(STORAGE_KEYS.PERMISSION_SWITCH, 'true');
+        await AsyncStorage.setItem(STORAGE_KEYS.PUSH_TOKEN, '');
+        console.log('expo-notifications: Skipping remote token registration in Expo Go (SDK 53).');
+        return;
       }
-      Alert.alert('Success', 'Hydration marked as completed!');
-      loadNotifications();
-    } catch (error) {
-      console.error('Error marking hydration as completed:', error);
-      Alert.alert('Error', 'Failed to mark hydration as completed');
+      const { status } = await Notifications.requestPermissionsAsync();
+      const granted = status === 'granted';
+      setPermissionGranted(granted);
+      await AsyncStorage.setItem(STORAGE_KEYS.PERMISSION_SWITCH, granted ? 'true' : 'false');
+      if (!granted) return;
+      const tokenData = await Notifications.getExpoPushTokenAsync();
+      await AsyncStorage.setItem(STORAGE_KEYS.PUSH_TOKEN, tokenData.data);
+    } catch (_) {}
+  }, []);
+
+  const onTogglePermission = useCallback(async (value: boolean) => {
+    setPermissionSwitch(value);
+    await AsyncStorage.setItem(STORAGE_KEYS.PERMISSION_SWITCH, value ? 'true' : 'false');
+    if (value && !permissionGranted) {
+      await registerForPushNotifications();
     }
-  }
+  }, [permissionGranted, registerForPushNotifications]);
 
-  async function markMedicationTaken(notificationId: string) {
-    if (!token) return;
-
+  // Actions
+  const scheduleHydrationReminder = useCallback(async () => {
     try {
-      await notificationService.markCompleted(notificationId);
-      if (token) {
-        await api.post(`/notifications/${notificationId}/complete`, {}, token as string);
-      }
-      Alert.alert('Success', 'Medication marked as taken!');
-      loadNotifications();
-    } catch (error) {
-      console.error('Error marking medication as taken:', error);
-      Alert.alert('Error', 'Failed to mark medication as taken');
+      await api.post('/notifications/schedule/hydration', { interval_minutes: hydrationInterval, amount_ml: hydrationAmount }, token);
+      await fetchNotifications();
+      await fetchStats();
+      setShowHydrationPicker(false);
+      Alert.alert('Hydration scheduled', `We’ll remind you every ${hydrationInterval} minutes. Stay hydrated! 💧`);
+    } catch (_) {
+      Alert.alert('Unable to schedule', 'Please try again later.');
     }
-  }
+  }, [fetchNotifications, fetchStats, token, hydrationInterval, hydrationAmount]);
 
-  async function snoozeHydrationReminder(notificationId: string) {
-    if (!token) return;
-
-    Alert.alert(
-      'Snooze Hydration',
-      'How long would you like to snooze?',
-      [
-        { text: '15 min', onPress: () => performSnooze(notificationId, 15) },
-        { text: '30 min', onPress: () => performSnooze(notificationId, 30) },
-        { text: '1 hour', onPress: () => performSnooze(notificationId, 60) },
-        { text: 'Cancel', style: 'cancel' },
-      ]
-    );
-  }
-
-  async function snoozeMedicationReminder(notificationId: string, minutes: number = 15) {
-    await performSnooze(notificationId, minutes);
-  }
-
-  async function performSnooze(notificationId: string, minutes: number) {
-    if (!token) return;
-
+  const markAllAsRead = useCallback(async () => {
     try {
-      // Find the expo notification ID if we have it
-      const expoNotificationId = Array.from(notificationService.scheduledNotifications.entries())
-        .find(([backendId]) => backendId === notificationId)?.[1];
-
-      await notificationService.snoozeNotification(expoNotificationId || '', minutes, notificationId);
-      
-      Alert.alert('Snoozed', `Reminder snoozed for ${minutes} minutes`);
-      loadNotifications();
-    } catch (error) {
-      console.error('Error snoozing notification:', error);
-      Alert.alert('Error', 'Failed to snooze reminder');
+      await api.post('/notifications/mark-all-read', {}, token);
+    } catch (_) {
+      // If endpoint not available, fall back client-side
     }
-  }
+    setNotifications(prev => prev.map(n => ({ ...n, status: n.status === 'scheduled' || n.status === 'delivered' || n.status === 'upcoming' ? 'completed' : n.status })));
+    await fetchStats();
+  }, [fetchStats, token]);
 
-  async function clearAllNotifications() {
-    Alert.alert('Clear All', 'Remove all notifications?', [
-      { text: 'Cancel', style: 'cancel' },
-      { 
-        text: 'Clear', 
-        style: 'destructive', 
-        onPress: async () => {
-          try {
-            await notificationService.cancelAllNotifications();
-            setNotifications([]);
-            if (token) {
-              // Optionally clear from backend too
-              const allNotifications = await api.get('/notifications', token as string);
-              if (Array.isArray(allNotifications)) {
-                for (const notif of allNotifications) {
-                  try {
-                    await api.put(`/notifications/${notif.id}`, { status: 'completed' }, token as string);
-                  } catch (e) {
-                    console.log('Error clearing notification from backend:', e);
-                  }
-                }
-              }
-            }
-            Alert.alert('Success', 'All notifications cleared');
-          } catch (error) {
-            console.error('Error clearing notifications:', error);
-            Alert.alert('Error', 'Failed to clear notifications');
-          }
-        }
-      },
-    ]);
-  }
+  const clearAllNotifications = useCallback(async () => {
+    try {
+      await api.post('/notifications/clear', {}, token);
+      Alert.alert('Cleared', 'Your recent notifications have been removed.');
+    } catch (_) {}
+    setNotifications([]);
+    await fetchStats();
+  }, [fetchStats, token]);
 
-  function getNotificationIcon(type: string) {
-    return type === 'hydration' ? 'water' : 'medical';
-  }
+  const completeNotification = useCallback(async (id: number | string) => {
+    try {
+      await api.put(`/notifications/${id}/complete`, {}, token);
+    } catch (_) {}
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, status: 'completed' } : n)));
+    await fetchStats();
+  }, [fetchStats, token]);
 
-  function getStatusColor(status: string) {
-    switch (status) {
-      case 'scheduled': return '#3B82F6';
-      case 'delivered': return '#10B981';
-      case 'completed': return '#059669';
-      case 'missed': return '#EF4444';
-      default: return '#6B7280';
-    }
-  }
+  const snoozeNotification = useCallback(async (id: number | string) => {
+    try {
+      await api.put(`/notifications/${id}/snooze`, { minutes: 10 }, token);
+    } catch (_) {}
+    setNotifications(prev => prev.map(n => (n.id === id ? { ...n, status: 'snoozed' } : n)));
+    await fetchStats();
+  }, [fetchStats, token]);
 
-  function getStatusText(status: string) {
-    switch (status) {
-      case 'scheduled': return 'Scheduled';
-      case 'delivered': return 'Delivered';
-      case 'completed': return 'Completed';
-      case 'missed': return 'Missed';
-      default: return 'Unknown';
-    }
-  }
+  const deleteNotification = useCallback(async (id: number | string) => {
+    try {
+      await api.del(`/notifications/${id}`, token);
+    } catch (_) {}
+    setNotifications(prev => prev.filter(n => n.id !== id));
+    await fetchStats();
+  }, [fetchStats, token]);
 
-  if (loading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading notifications...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([fetchNotifications(), fetchStats()]);
+    setRefreshing(false);
+  }, [fetchNotifications, fetchStats]);
+
+  const statsList = useMemo(() => ([
+    { key: 'completed', label: 'Completed', value: stats.completed, color: '#22c55e', icon: 'checkmark-done-outline' as const },
+    { key: 'upcoming', label: 'Upcoming', value: stats.upcoming, color: '#3b82f6', icon: 'time-outline' as const },
+    { key: 'missed', label: 'Missed', value: stats.missed, color: '#ef4444', icon: 'alert-circle-outline' as const },
+  ]), [stats]);
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
+      <ScrollView
+        contentContainerStyle={[styles.scrollContent, { paddingTop: (insets.top || 12) } ]}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}>
         {/* Header */}
-        <View style={styles.headerSection}>
-          <Text style={styles.headerTitle}>Reminders & Notifications</Text>
-          <Text style={styles.headerSubtitle}>Manage your health reminders</Text>
+        <View style={styles.header}>
+          <Text style={styles.title}>Notifications</Text>
+          <Text style={styles.subtitle}>Stay on top of your routine</Text>
         </View>
 
-        {/* Permission Status */}
-        <View style={styles.permissionCard}>
-          <View style={styles.permissionHeader}>
-            <Ionicons 
-              name={permissionGranted ? "checkmark-circle" : "alert-circle"} 
-              size={24} 
-              color={permissionGranted ? "#10B981" : "#F59E0B"} 
-            />
-            <Text style={styles.permissionTitle}>
-              {permissionGranted ? 'Notifications Enabled' : 'Notifications Disabled'}
-            </Text>
+        {/* Permission card + toggle */}
+        <View style={styles.card}>
+          <View style={styles.cardRow}>
+            <Ionicons name="notifications" size={22} color="#1E3A8A" />
+            <Text style={styles.cardTitle}>Push Notifications</Text>
+            <View style={{ flex: 1 }} />
+            <Switch value={permissionSwitch} onValueChange={onTogglePermission} />
           </View>
-          <Text style={styles.permissionText}>
-            {permissionGranted 
-              ? 'You will receive reminders for hydration and medications'
-              : 'Enable notifications to receive health reminders'
-            }
-          </Text>
+          {/* Removed description text per request */}
         </View>
 
-        {/* Quick Actions */}
-        <View style={styles.sectionContainer}>
+        {/* Ringtone (Premium) */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Ringtone</Text>
+        </View>
+        <View style={styles.card}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Ionicons name="musical-notes" size={20} color="#1E3A8A" />
+              <Text style={styles.cardTitle}>Change Ringtone</Text>
+            </View>
+            <View style={[styles.premiumLockBadge]}>
+              <Ionicons name="lock-closed" size={14} color="#F59E0B" />
+              <Text style={{ color: '#F59E0B', fontWeight: '600', marginLeft: 6, fontSize: 12 }}>Premium</Text>
+            </View>
+          </View>
+          <Text style={styles.cardText}>Choose from app ringtones or upload your own.</Text>
+          <View style={{ flexDirection: 'row', gap: 10, marginTop: 10 }}>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => Alert.alert('Premium Feature', 'Changing ringtone is available for Premium users.')}>
+              <Ionicons name="play" size={18} color="#1E3A8A" />
+              <Text style={styles.actionText}>Browse Ringtones</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.actionBtn} onPress={() => Alert.alert('Premium Feature', 'Uploading personal ringtone requires Premium.')}>
+              <Ionicons name="cloud-upload" size={18} color="#1E3A8A" />
+              <Text style={styles.actionText}>Upload Ringtone</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Stats */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Summary</Text>
+        </View>
+        <View style={styles.statsRow}>
+          {statsList.map(s => (
+            <View key={s.key} style={[styles.statBox, { borderColor: '#E5E7EB' }]}> 
+              <Ionicons name={s.icon} size={18} color={s.color} />
+              <Text style={[styles.statValue, { color: s.color }]}>{s.value ?? 0}</Text>
+              <Text style={styles.statLabel}>{s.label}</Text>
+            </View>
+          ))}
+        </View>
+
+        {/* Quick Actions: Schedule Hydration, Mark All as Read, Clear */}
+        <View style={styles.sectionHeaderRow}>
           <Text style={styles.sectionTitle}>Quick Actions</Text>
-          <View style={styles.actionButtons}>
-            <TouchableOpacity 
-              style={styles.actionButton}
-              onPress={scheduleHydrationReminder}
-              disabled={!permissionGranted}
-            >
-              <Ionicons name="water" size={24} color="#3B82F6" />
-              <Text style={styles.actionButtonText}>Schedule Hydration</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity 
-              style={styles.actionButton}
-              onPress={clearAllNotifications}
-            >
-              <Ionicons name="trash" size={24} color="#EF4444" />
-              <Text style={styles.actionButtonText}>Clear All</Text>
-            </TouchableOpacity>
-          </View>
         </View>
+        <View style={styles.actionsRow}>
+          <TouchableOpacity style={styles.actionBtn} onPress={() => setShowHydrationPicker(true)}>
+            <Ionicons name="water" size={18} color="#1E3A8A" />
+            <Text style={styles.actionText}>Schedule Hydration</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={markAllAsRead}>
+            <Ionicons name="checkmark-done" size={18} color="#10B981" />
+            <Text style={styles.actionText}>Mark All as Read</Text>
+          </TouchableOpacity>
+          <TouchableOpacity style={styles.actionBtn} onPress={clearAllNotifications}>
+            <Ionicons name="trash" size={18} color="#EF4444" />
+            <Text style={styles.actionText}>Clear</Text>
+          </TouchableOpacity>
+        </View>
+
+        <Modal visible={showHydrationPicker} transparent animationType="fade" onRequestClose={() => setShowHydrationPicker(false)}>
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalCard}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="water" size={20} color="#1E3A8A" />
+                  <Text style={styles.sheetTitle}>Schedule Hydration</Text>
+                </View>
+                <TouchableOpacity onPress={() => setShowHydrationPicker(false)}>
+                  <Ionicons name="close" size={20} color="#6B7280" />
+                </TouchableOpacity>
+              </View>
+              <Text style={styles.sheetSubtitle}>Select interval and amount</Text>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                {[30, 60, 120, 180].map((min) => (
+                  <TouchableOpacity key={min} style={[styles.pillOption, hydrationInterval === min && styles.pillOptionActive]} onPress={() => setHydrationInterval(min)}>
+                    <Text style={[styles.pillText, hydrationInterval === min && styles.pillTextActive]}>{min} min</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                {[200, 300, 400].map((ml) => (
+                  <TouchableOpacity key={ml} style={[styles.pillOption, hydrationAmount === ml && styles.pillOptionActive]} onPress={() => setHydrationAmount(ml)}>
+                    <Text style={[styles.pillText, hydrationAmount === ml && styles.pillTextActive]}>{ml} ml</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <View style={{ flexDirection: 'row', gap: 8, marginTop: 12 }}>
+                <TouchableOpacity style={styles.actionBtn} onPress={scheduleHydrationReminder}>
+                  <Ionicons name="checkmark" size={18} color="#10B981" />
+                  <Text style={styles.actionText}>Confirm</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.actionBtn} onPress={() => setShowHydrationPicker(false)}>
+                  <Ionicons name="close" size={18} color="#EF4444" />
+                  <Text style={styles.actionText}>Cancel</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </Modal>
+
 
         {/* Notifications List */}
-        <View style={styles.sectionContainer}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Recent Notifications</Text>
-            <Text style={styles.notificationCount}>{notifications.length}</Text>
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Recent</Text>
+        </View>
+
+        {loading ? (
+          <ActivityIndicator style={{ marginTop: 24 }} />
+        ) : notifications.length === 0 ? (
+          <View style={styles.emptyBox}>
+            <Ionicons name="notifications-off-outline" size={40} color="#94a3b8" />
+            <Text style={styles.emptyTitle}>No notifications</Text>
+            <Text style={styles.emptyText}>You’re all caught up for now.</Text>
           </View>
-          
-          {notifications.length === 0 ? (
-            <View style={styles.emptyState}>
-              <Ionicons name="notifications-off" size={48} color="#9CA3AF" />
-              <Text style={styles.emptyText}>No notifications yet</Text>
-              <Text style={styles.emptySubtext}>Schedule reminders to see them here</Text>
-            </View>
-          ) : (
-            notifications.slice(0, 10).map((notification) => (
-              <View key={notification.id} style={styles.notificationCard}>
-                <View style={styles.notificationIcon}>
-                  <Ionicons 
-                    name={getNotificationIcon(notification.type)} 
-                    size={20} 
-                    color={getStatusColor(notification.status)} 
-                  />
+        ) : (
+          <View>
+            {notifications.map((n) => (
+              <View key={n.id} style={styles.listItem}>
+                <View style={styles.listIconWrap}>
+                  <Ionicons name={getNotificationIcon(n.type)} size={20} color="#1E3A8A" />
                 </View>
-                
-                <View style={styles.notificationContent}>
-                  <Text style={styles.notificationTitle}>{notification.title}</Text>
-                  <Text style={styles.notificationBody}>{notification.body}</Text>
-                  <Text style={styles.notificationTime}>
-                    {new Date(notification.scheduled_time).toLocaleString()}
-                  </Text>
-                </View>
-                
-                <View style={styles.notificationStatus}>
-                  <View style={[styles.statusBadge, { backgroundColor: getStatusColor(notification.status) + '20' }]}>
-                    <Text style={[styles.statusText, { color: getStatusColor(notification.status) }]}>
-                      {getStatusText(notification.status)}
-                    </Text>
-                  </View>
-                  {notification.status === 'scheduled' && (
-                    <View style={styles.notificationActions}>
-                      <TouchableOpacity
-                        style={styles.notificationActionButton}
-                        onPress={() => {
-                          if (notification.type === 'hydration') {
-                            snoozeHydrationReminder(notification.id);
-                          } else {
-                            snoozeMedicationReminder(notification.id, 15);
-                          }
-                        }}
-                      >
-                        <Ionicons name="time-outline" size={16} color="#3B82F6" />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.notificationActionButton}
-                        onPress={() => {
-                          if (notification.type === 'hydration') {
-                            markHydrationCompleted(notification.id);
-                          } else {
-                            markMedicationTaken(notification.id);
-                          }
-                        }}
-                      >
-                        <Ionicons name="checkmark-circle-outline" size={16} color="#10B981" />
-                      </TouchableOpacity>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.itemHeaderRow}>
+                    <Text style={styles.itemTitle}>{n.title}</Text>
+                    <View style={[styles.statusPill, { backgroundColor: getStatusBg(n.status) }]}>
+                      <Text style={[styles.statusText, { color: getStatusColor(n.status) }]}>{getStatusText(n.status)}</Text>
                     </View>
-                  )}
+                  </View>
+                  {!!(n.message || n.body) && <Text style={styles.itemMessage}>{n.message || n.body}</Text>}
+                  <Text style={styles.itemMeta}>
+                    {n.scheduled_at || n.scheduled_time
+                      ? `${formatDate(n.scheduled_at || n.scheduled_time)} • ${formatTime(n.scheduled_at || n.scheduled_time)}`
+                      : n.created_at
+                        ? `${formatDate(n.created_at)} • ${formatTime(n.created_at)}`
+                        : ''}
+                  </Text>
+                  <View style={styles.itemActionsRow}>
+                    <TouchableOpacity style={styles.itemActionBtn} onPress={() => completeNotification(n.id)}>
+                      <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+                      <Text style={styles.itemActionText}>Complete</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.itemActionBtn} onPress={() => snoozeNotification(n.id)}>
+                      <Ionicons name="time" size={18} color="#F59E0B" />
+                      <Text style={styles.itemActionText}>Snooze</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.itemActionBtn} onPress={() => deleteNotification(n.id)}>
+                      <Ionicons name="trash" size={18} color="#EF4444" />
+                      <Text style={styles.itemActionText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
-            ))
-          )}
-        </View>
+            ))}
+          </View>
+        )}
       </ScrollView>
-
       <BottomNavigation currentRoute="notification" />
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8F9FA' },
-  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  loadingText: { fontSize: 16, color: '#6B7280' },
-  scrollView: { flex: 1 },
-  scrollContent: { paddingBottom: 100 },
-  
-  // Header
-  headerSection: { paddingHorizontal: 20, paddingTop: 20, paddingBottom: 16 },
-  headerTitle: { fontSize: 28, fontWeight: '700', color: '#1F2937' },
-  headerSubtitle: { fontSize: 16, color: '#6B7280', marginTop: 4 },
-  
-  // Permission Card
-  permissionCard: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 16,
-    marginHorizontal: 20,
-    marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3
-  },
-  permissionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 8
-  },
-  permissionTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginLeft: 8
-  },
-  permissionText: {
-    fontSize: 14,
-    color: '#6B7280',
-    lineHeight: 20
-  },
-  
-  // Sections
-  sectionContainer: { paddingHorizontal: 20, marginBottom: 24 },
-  sectionTitle: { fontSize: 20, fontWeight: '700', color: '#1F2937', marginBottom: 16 },
-  sectionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
-  notificationCount: { fontSize: 14, color: '#6B7280', backgroundColor: '#F3F4F6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 12 },
-  
-  // Action Buttons
-  actionButtons: { flexDirection: 'row', justifyContent: 'space-between' },
-  actionButton: {
-    backgroundColor: 'white',
-    borderRadius: 16,
-    padding: 16,
-    alignItems: 'center',
+  container: {
     flex: 1,
-    marginHorizontal: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3
+    backgroundColor: '#F8F9FA',
   },
-  actionButtonText: { fontSize: 14, fontWeight: '600', color: '#1F2937', marginTop: 8 },
-  
-  // Notifications
-  notificationCard: {
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 100,
+  },
+  header: {
+    marginBottom: 16,
+  },
+  title: {
+    color: '#1F2937',
+    fontSize: 30,
+    fontWeight: '800',
+  },
+  subtitle: {
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  sectionHeaderRow: {
+    marginTop: 8,
+    marginBottom: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  sectionTitle: {
+    color: '#1F2937',
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  card: {
+    backgroundColor: 'white',
+    borderColor: '#E5E7EB',
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  cardRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  cardTitle: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '700',
+    marginLeft: 6,
+  },
+  cardText: {
+    color: '#6B7280',
+    marginTop: 4,
+  },
+  premiumLockBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.3)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalCard: {
     backgroundColor: 'white',
     borderRadius: 16,
     padding: 16,
-    marginBottom: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    width: '100%',
+    maxWidth: 420,
   },
-  notificationIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#F3F4F6',
+  sheetTitle: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  sheetSubtitle: {
+    color: '#6B7280',
+    marginTop: 6,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  statBox: {
+    flex: 1,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 12,
+    alignItems: 'center',
+    gap: 6,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  statLabel: {
+    color: '#94a3b8',
+    fontSize: 12,
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 16,
+    flexWrap: 'wrap',
+  },
+  actionBtn: {
+    flexBasis: '32%',
+    flexGrow: 1,
+    flexDirection: 'row',
+    gap: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12
-  },
-  notificationContent: { flex: 1 },
-  notificationTitle: { fontSize: 16, fontWeight: '600', color: '#1F2937' },
-  notificationBody: { fontSize: 14, color: '#6B7280', marginTop: 2 },
-  notificationTime: { fontSize: 12, color: '#9CA3AF', marginTop: 4 },
-  notificationStatus: { alignItems: 'flex-end', gap: 8 },
-  statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-  statusText: { fontSize: 12, fontWeight: '600' },
-  notificationActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
-  notificationActionButton: {
-    padding: 6,
-    borderRadius: 8,
-    backgroundColor: '#F3F4F6',
-  },
-  
-  // Empty State
-  emptyState: {
-    alignItems: 'center',
-    paddingVertical: 48,
+    paddingVertical: 10,
+    borderRadius: 10,
     backgroundColor: 'white',
-    borderRadius: 16,
-    marginTop: 8
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
-  emptyText: { fontSize: 16, color: '#6B7280', marginTop: 12 },
-  emptySubtext: { fontSize: 14, color: '#9CA3AF', marginTop: 4 },
+  actionText: {
+    color: '#1F2937',
+    fontWeight: '700',
+    fontSize: 15,
+  },
+  listItem: {
+    flexDirection: 'row',
+    gap: 12,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  listIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#EBF8FF',
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  itemHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  itemTitle: {
+    color: '#1F2937',
+    fontSize: 16,
+    fontWeight: '700',
+    flex: 1,
+    paddingRight: 8,
+  },
+  statusPill: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  statusText: {
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  itemMessage: {
+    color: '#4B5563',
+    marginTop: 2,
+  },
+  itemMeta: {
+    color: '#6B7280',
+    fontSize: 12,
+    marginTop: 4,
+  },
+  itemActionsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 10,
+  },
+  pillOption: {
+    backgroundColor: 'white',
+    borderColor: '#E5E7EB',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+  },
+  pillOptionActive: {
+    backgroundColor: '#EBF8FF',
+    borderColor: '#93C5FD',
+  },
+  pillText: {
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  pillTextActive: {
+    color: '#1E3A8A',
+  },
+  itemActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 8,
+  },
+  itemActionText: {
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  emptyBox: {
+    alignItems: 'center',
+    gap: 8,
+    padding: 24,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+  },
+  emptyTitle: {
+    color: '#1F2937',
+    fontWeight: '800',
+    fontSize: 18,
+  },
+  emptyText: {
+    color: '#6B7280',
+  },
 });
+ 

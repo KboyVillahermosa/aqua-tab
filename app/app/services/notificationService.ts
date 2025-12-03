@@ -1,11 +1,22 @@
+/**
+ * Local Notifications Only (Expo SDK 53, Expo Go)
+ *
+ * This service configures and schedules LOCAL notifications only.
+ * - No remote push tokens, no FCM/APNs, no server calls.
+ * - Works inside Expo Go without a dev client or EAS build.
+ *
+ * Quick examples:
+ *   await requestPermissions();
+ *   await scheduleReminderInSeconds('Drink Water', '200ml now', 5);
+ *   await scheduleDailyReminder('Evening Meds', 'Take your pills', 21, 0);
+ */
 import * as Notifications from 'expo-notifications';
 import * as Device from 'expo-device';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
-import * as api from '../api';
 
 // Check if running in Expo Go (push notifications not supported, but local notifications work)
-const isExpoGo = Constants.executionEnvironment === 'storeClient';
+const isExpoGo = (Constants as any).appOwnership === 'expo' || Constants.executionEnvironment === 'storeClient';
 
 // Configure notification handler (works for local notifications in Expo Go)
 Notifications.setNotificationHandler({
@@ -18,35 +29,27 @@ Notifications.setNotificationHandler({
   }),
 });
 
-// Suppress push token warnings in Expo Go
-// The warning comes from automatic push token registration in expo-notifications
-// This is expected behavior - local notifications still work fine in Expo Go
+// Log that we are using local-only notifications in Expo Go
 if (isExpoGo) {
-  console.log('Running in Expo Go - using local notifications only (push notifications disabled)');
-  
-  // Suppress the specific Expo Go push notification warning
-  // This warning appears because expo-notifications tries to auto-register push tokens
-  const originalError = console.error;
+  console.log('Expo Go detected: using local notifications only.');
+  // Suppress Expo Go remote push warning emitted by expo-notifications
   const originalWarn = console.warn;
-  
-  console.error = (...args: any[]) => {
-    const message = args[0]?.toString() || '';
-    if (message.includes('expo-notifications') && 
-        (message.includes('Expo Go') || message.includes('SDK 53') || message.includes('push notifications'))) {
-      // Suppress this specific error/warning
-      return;
-    }
-    originalError.apply(console, args);
+  const originalError = console.error;
+  const shouldSuppress = (msg: any) => {
+    const text = (msg?.toString?.() || String(msg)).toLowerCase();
+    return (
+      text.includes('expo go') &&
+      text.includes('sdk 53') &&
+      (text.includes('push notifications') || text.includes('remote notifications'))
+    );
   };
-  
   console.warn = (...args: any[]) => {
-    const message = args[0]?.toString() || '';
-    if (message.includes('expo-notifications') && 
-        (message.includes('Expo Go') || message.includes('SDK 53') || message.includes('push notifications'))) {
-      // Suppress this specific warning
-      return;
-    }
+    if (args.some(shouldSuppress)) return;
     originalWarn.apply(console, args);
+  };
+  console.error = (...args: any[]) => {
+    if (args.some(shouldSuppress)) return;
+    originalError.apply(console, args);
   };
 }
 
@@ -59,12 +62,7 @@ export interface NotificationData {
 }
 
 class NotificationService {
-  private token: string | null = null;
-  public scheduledNotifications: Map<string, string> = new Map(); // Maps backend notification ID to expo notification ID
-
-  setToken(token: string | null) {
-    this.token = token;
-  }
+  public scheduledNotifications: Map<string, string> = new Map();
 
   /**
    * Request notification permissions (local notifications only in Expo Go)
@@ -104,7 +102,7 @@ class NotificationService {
             lightColor: '#1E3A8A',
             sound: 'default',
             enableVibrate: true,
-            showBadge: !isExpoGo, // Badge might not work in Expo Go
+            showBadge: !isExpoGo,
           });
         } catch (channelError) {
           console.log('Error setting notification channel (non-critical):', channelError);
@@ -135,11 +133,10 @@ class NotificationService {
           body,
           sound: true,
           data: data || {},
-          categoryId: data?.type === 'medication' ? 'medication' : 'hydration',
         },
         trigger: trigger instanceof Date 
-          ? { date: trigger }
-          : { seconds: trigger },
+          ? { type: Notifications.SchedulableTriggerInputTypes.DATE, date: trigger }
+          : { type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL, seconds: trigger },
       });
 
       return notificationId;
@@ -166,9 +163,9 @@ class NotificationService {
           body,
           sound: true,
           data: data || {},
-          categoryId: data?.type === 'medication' ? 'medication' : 'hydration',
         },
         trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.CALENDAR,
           hour,
           minute,
           repeats: true,
@@ -192,8 +189,6 @@ class NotificationService {
     times: string[],
     backendNotificationId?: string
   ): Promise<void> {
-    if (!this.token) return;
-
     try {
       // Cancel existing notifications for this medication
       await this.cancelMedicationNotifications(medicationId);
@@ -229,20 +224,6 @@ class NotificationService {
         if (notificationId && backendNotificationId) {
           this.scheduledNotifications.set(backendNotificationId, notificationId);
         }
-
-        // Also save to backend
-        if (this.token) {
-          try {
-            await api.post('/notifications/schedule/medication', {
-              medication_id: medicationId,
-              medication_name: medicationName,
-              scheduled_time: triggerDate.toISOString(),
-              dosage,
-            }, this.token);
-          } catch (err) {
-            console.log('Error saving medication notification to backend:', err);
-          }
-        }
       }
     } catch (error) {
       console.error('Error scheduling medication notifications:', error);
@@ -257,8 +238,6 @@ class NotificationService {
     amountMl: number = 200,
     backendNotificationId?: string
   ): Promise<void> {
-    if (!this.token) return;
-
     try {
       const nextReminder = new Date(Date.now() + intervalMinutes * 60 * 1000);
 
@@ -276,18 +255,6 @@ class NotificationService {
       if (notificationId && backendNotificationId) {
         this.scheduledNotifications.set(backendNotificationId, notificationId);
       }
-
-      // Save to backend
-      if (this.token) {
-        try {
-          await api.post('/notifications/schedule/hydration', {
-            interval_minutes: intervalMinutes,
-            amount_ml: amountMl,
-          }, this.token);
-        } catch (err) {
-          console.log('Error saving hydration notification to backend:', err);
-        }
-      }
     } catch (error) {
       console.error('Error scheduling hydration reminder:', error);
     }
@@ -301,8 +268,6 @@ class NotificationService {
     minutes: number = 15,
     backendNotificationId?: string
   ): Promise<void> {
-    if (!this.token) return;
-
     try {
       // Cancel the original notification
       if (notificationId) {
@@ -320,16 +285,7 @@ class NotificationService {
         }
       );
 
-      // Update backend
-      if (this.token && backendNotificationId) {
-        try {
-          await api.post(`/notifications/${backendNotificationId}/snooze`, {
-            minutes,
-          }, this.token);
-        } catch (err) {
-          console.log('Error updating snooze on backend:', err);
-        }
-      }
+      // No backend updates in local-only mode
     } catch (error) {
       console.error('Error snoozing notification:', error);
     }
@@ -420,17 +376,24 @@ class NotificationService {
   /**
    * Mark notification as completed
    */
-  async markCompleted(backendNotificationId: string): Promise<void> {
-    if (!this.token) return;
-
-    try {
-      await api.post(`/notifications/${backendNotificationId}/complete`, {}, this.token);
-    } catch (error) {
-      console.error('Error marking notification as completed:', error);
-    }
+  async markCompleted(_backendNotificationId: string): Promise<void> {
+    // No-op in local-only mode
+    return Promise.resolve();
   }
 }
 
 // Export singleton instance
 export const notificationService = new NotificationService();
+
+// Default export for module compatibility
+export default notificationService;
+
+// Convenience helpers for common local reminders
+export async function scheduleReminderInSeconds(title: string, body: string, seconds: number) {
+  return notificationService.scheduleNotification(title, body, seconds);
+}
+
+export async function scheduleDailyReminder(title: string, body: string, hour: number, minute: number) {
+  return notificationService.scheduleRecurringNotification(title, body, hour, minute);
+}
 

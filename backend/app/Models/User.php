@@ -28,6 +28,8 @@ class User extends Authenticatable
         'gender',
         'address',
         'emergency_contact',
+        'emergency_contact_name',
+        'emergency_contact_phone',
         'current_subscription_plan_id',
         'subscription_expires_at',
         'onboarding_completed',
@@ -112,7 +114,7 @@ class User extends Authenticatable
             return false; // Default to free plan
         }
 
-        return match($feature) {
+        return match ($feature) {
             'unlimited_medications' => $plan->max_medications === null,
             'unlimited_hydration' => $plan->max_hydration_entries === null,
             'advanced_scheduling' => $plan->advanced_scheduling,

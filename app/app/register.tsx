@@ -20,6 +20,8 @@ export default function Register() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [showGenderPicker, setShowGenderPicker] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(new Date());
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -176,16 +178,16 @@ export default function Register() {
             />
           </View>
 
-          <View style={styles.inputWrapper}>
+          <TouchableOpacity 
+            style={styles.inputWrapper}
+            onPress={() => setShowDatePicker(true)}
+          >
             <Ionicons name="calendar-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
-            <TextInput
-              placeholder="Date of Birth (YYYY-MM-DD) (Optional)"
-              value={dateOfBirth}
-              onChangeText={setDateOfBirth}
-              style={styles.input}
-              placeholderTextColor="#8E8E93"
-            />
-          </View>
+            <Text style={[styles.input, !dateOfBirth && { color: '#8E8E93' }]}>
+              {dateOfBirth || 'Date of Birth (Optional)'}
+            </Text>
+            <Ionicons name="chevron-down-outline" size={20} color="#8E8E93" />
+          </TouchableOpacity>
 
           <TouchableOpacity 
             style={styles.inputWrapper}
@@ -268,6 +270,119 @@ export default function Register() {
           </View>
         </Modal>
 
+        {/* Date Picker Modal */}
+        <Modal
+          visible={showDatePicker}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setShowDatePicker(false)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <Text style={styles.modalTitle}>Select Date of Birth</Text>
+              
+              {/* Simple Year/Month/Day Selectors */}
+              <View style={styles.datePickerContainer}>
+                <View style={styles.dateColumn}>
+                  <Text style={styles.dateLabel}>Year</Text>
+                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
+                    {Array.from({ length: 100 }, (_, i) => new Date().getFullYear() - i).map(year => (
+                      <TouchableOpacity
+                        key={year}
+                        style={styles.dateOption}
+                        onPress={() => {
+                          const newDate = new Date(selectedDate);
+                          newDate.setFullYear(year);
+                          setSelectedDate(newDate);
+                        }}
+                      >
+                        <Text style={[
+                          styles.dateOptionText,
+                          selectedDate.getFullYear() === year && styles.dateOptionTextSelected
+                        ]}>{year}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+                
+                <View style={styles.dateColumn}>
+                  <Text style={styles.dateLabel}>Month</Text>
+                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
+                    {Array.from({ length: 12 }, (_, i) => i + 1).map(month => (
+                      <TouchableOpacity
+                        key={month}
+                        style={styles.dateOption}
+                        onPress={() => {
+                          const newDate = new Date(selectedDate);
+                          newDate.setMonth(month - 1);
+                          setSelectedDate(newDate);
+                        }}
+                      >
+                        <Text style={[
+                          styles.dateOptionText,
+                          selectedDate.getMonth() + 1 === month && styles.dateOptionTextSelected
+                        ]}>{month.toString().padStart(2, '0')}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+                
+                <View style={styles.dateColumn}>
+                  <Text style={styles.dateLabel}>Day</Text>
+                  <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(day => (
+                      <TouchableOpacity
+                        key={day}
+                        style={styles.dateOption}
+                        onPress={() => {
+                          const newDate = new Date(selectedDate);
+                          newDate.setDate(day);
+                          setSelectedDate(newDate);
+                        }}
+                      >
+                        <Text style={[
+                          styles.dateOptionText,
+                          selectedDate.getDate() === day && styles.dateOptionTextSelected
+                        ]}>{day.toString().padStart(2, '0')}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </View>
+              </View>
+
+              <TouchableOpacity 
+                style={styles.modalConfirm}
+                onPress={() => {
+                  const year = selectedDate.getFullYear();
+                  const month = String(selectedDate.getMonth() + 1).padStart(2, '0');
+                  const day = String(selectedDate.getDate()).padStart(2, '0');
+                  setDateOfBirth(`${year}-${month}-${day}`);
+                  setShowDatePicker(false);
+                }}
+              >
+                <Text style={styles.modalConfirmText}>Confirm</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.modalOption}
+                onPress={() => {
+                  setDateOfBirth('');
+                  setShowDatePicker(false);
+                }}
+              >
+                <Text style={[styles.modalOptionText, { color: '#6B7280' }]}>Clear</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity 
+                style={styles.modalCancel}
+                onPress={() => setShowDatePicker(false)}
+              >
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+
         {/* Terms Checkbox */}
         <TouchableOpacity style={styles.termsContainer} onPress={() => setAgreeTerms(!agreeTerms)}>
           <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
@@ -281,7 +396,7 @@ export default function Register() {
           {loading ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.signUpButtonText}>Sign UP</Text>
+            <Text style={styles.signUpButtonText}>Sign Up</Text>
           )}
         </TouchableOpacity>
 
@@ -311,7 +426,7 @@ export default function Register() {
           style={styles.bottomLinkContainer}
         >
           <Text style={styles.bottomLinkText}>
-            New member? <Text style={styles.bottomLinkHighlight}>Sign up</Text>
+            Already have an account? <Text style={styles.bottomLinkHighlight}>Sign in</Text>
           </Text>
         </TouchableOpacity>
       </View>
@@ -543,6 +658,51 @@ const styles = StyleSheet.create({
   modalCancelText: {
     fontSize: 16,
     color: '#EF4444',
+    fontWeight: '600',
+  },
+  datePickerContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    height: 200,
+    marginBottom: 20,
+  },
+  dateColumn: {
+    flex: 1,
+    marginHorizontal: 4,
+  },
+  dateLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1F2937',
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  dateScroll: {
+    maxHeight: 180,
+  },
+  dateOption: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  dateOptionText: {
+    fontSize: 16,
+    color: '#6B7280',
+  },
+  dateOptionTextSelected: {
+    color: '#1E3A8A',
+    fontWeight: '600',
+    fontSize: 18,
+  },
+  modalConfirm: {
+    backgroundColor: '#1E3A8A',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  modalConfirmText: {
+    fontSize: 16,
+    color: 'white',
     fontWeight: '600',
   },
 });

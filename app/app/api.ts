@@ -82,4 +82,4 @@ export async function del(path: string, token?: string) {
   return data;
 }
 
-export default { post, get };
+export default { post, get, put, del };

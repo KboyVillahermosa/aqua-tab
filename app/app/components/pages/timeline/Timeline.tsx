@@ -1,62 +1,34 @@
-import React from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Modal } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useSnooze } from '../../../hooks/useSnooze';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import BottomNavigation from '../../navigation/BottomNavigation';
+import * as api from '../../../api';
 
 export default function Timeline() {
   const router = useRouter();
+  const { token } = useLocalSearchParams();
+  const { logSnooze } = useSnooze();
+  const [timelineData, setTimelineData] = useState<Array<{ id: number; time: string; title: string; body?: string; description?: string; status: string; type?: string; icon?: string }>>([]);
+  const [selectedItem, setSelectedItem] = useState<any>(null);
+  const [modalVisible, setModalVisible] = useState(false);
 
-  const timelineData = [
-    {
-      id: 1,
-      time: '8:00 AM',
-      title: 'Morning Medication',
-      description: 'Take vitamin D supplement',
-      status: 'completed',
-      icon: 'medical'
-    },
-    {
-      id: 2,
-      time: '8:30 AM',
-      title: 'Water Reminder',
-      description: 'Drink 250ml of water',
-      status: 'completed',
-      icon: 'water'
-    },
-    {
-      id: 3,
-      time: '10:30 AM',
-      title: 'Medicine Dose',
-      description: 'Blood pressure medication',
-      status: 'upcoming',
-      icon: 'medical'
-    },
-    {
-      id: 4,
-      time: '12:00 PM',
-      title: 'Hydration Check',
-      description: 'Check daily water intake progress',
-      status: 'skipped',
-      icon: 'water'
-    },
-    {
-      id: 5,
-      time: '2:00 PM',
-      title: 'Afternoon Reminder',
-      description: 'Take calcium supplement',
-      status: 'pending',
-      icon: 'alarm'
-    },
-    {
-      id: 6,
-      time: '6:00 PM',
-      title: 'Evening Medication',
-      description: 'Take prescribed medication',
-      status: 'pending',
-      icon: 'medical'
-    },
-  ];
+  useEffect(() => {
+    const loadTimeline = async () => {
+      try {
+        const data = await api.get('/notifications/today-timeline', token as string, 3000);
+        if (Array.isArray(data)) {
+          setTimelineData(data);
+        } else {
+          setTimelineData([]);
+        }
+      } catch (_) {
+        setTimelineData([]);
+      }
+    };
+    loadTimeline();
+  }, [token]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -103,6 +75,19 @@ export default function Timeline() {
     }
   };
 
+  const onSnooze = useCallback(async (item: any) => {
+    try {
+      await logSnooze({
+        reminderType: item.icon === 'medical' ? 'medication' : item.icon === 'water' ? 'hydration' : 'general',
+        reminderKey: String(item.id),
+        scheduledTime: undefined,
+        snoozeMinutes: 10,
+      });
+    } catch (_) {
+      // ignore error for now; UI can show toast/snackbar if available
+    }
+  }, [logSnooze]);
+
   return (
     <SafeAreaView style={styles.container}>
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
@@ -115,49 +100,101 @@ export default function Timeline() {
           <View style={styles.placeholder} />
         </View>
 
-        {/* Date Header */}
-        <View style={styles.dateHeader}>
-          <Text style={styles.dateText}>Today, October 4, 2025</Text>
-          <Text style={styles.progressText}>4 of 6 activities completed</Text>
-        </View>
-
         {/* Timeline Items */}
         <View style={styles.timelineContainer}>
-          {timelineData.map((item, index) => (
-            <View key={item.id} style={styles.timelineItem}>
-              <View style={styles.timelineLeft}>
-                <Text style={styles.timeText}>{item.time}</Text>
-                <View style={styles.timelineLine}>
-                  <View style={[styles.timelineDot, { backgroundColor: getStatusColor(item.status) }]} />
-                  {index < timelineData.length - 1 && <View style={styles.connector} />}
+          {timelineData.length > 0 ? (
+            timelineData.map((item, index) => (
+              <View key={item.id} style={styles.timelineItem}>
+                <View style={styles.timelineLeft}>
+                  <Text style={styles.timeText}>{item.time}</Text>
+                  <View style={styles.timelineLine}>
+                    <View style={[styles.timelineDot, { backgroundColor: getStatusColor(item.status) }]} />
+                    {index < timelineData.length - 1 && <View style={styles.connector} />}
+                  </View>
                 </View>
+
+                <TouchableOpacity style={styles.timelineCard} onPress={() => { setSelectedItem(item); setModalVisible(true); }}>
+                  <View style={styles.cardHeader}>
+                    <View style={styles.cardIcon}>
+                      <Ionicons name={(item.type === 'medication' ? 'medical' : item.type === 'hydration' ? 'water' : 'notifications') as any} size={20} color="#1E3A8A" />
+                    </View>
+                    <View style={styles.cardContent}>
+                      <Text style={styles.cardTitle}>{item.title}</Text>
+                      {!!(item.body || item.description) && (
+                        <Text style={styles.cardDescription}>{item.body || item.description}</Text>
+                      )}
+                    </View>
+                    <View style={styles.statusContainer}>
+                      <Ionicons name={getStatusIcon(item.status) as any} size={20} color={getStatusColor(item.status)} />
+                    </View>
+                  </View>
+                  <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+                    {getStatusText(item.status)}
+                  </Text>
+                  {(item.status === 'upcoming' || item.status === 'pending') && (
+                    <View style={styles.actionsRow}>
+                      <TouchableOpacity onPress={() => onSnooze(item)} style={styles.actionButton}>
+                        <Ionicons name="time" size={16} color="#1E3A8A" />
+                        <Text style={styles.actionText}>Snooze 10m</Text>
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                </TouchableOpacity>
               </View>
-              
-              <TouchableOpacity style={styles.timelineCard}>
-                <View style={styles.cardHeader}>
-                  <View style={styles.cardIcon}>
-                    <Ionicons name={item.icon as any} size={20} color="#1E3A8A" />
-                  </View>
-                  <View style={styles.cardContent}>
-                    <Text style={styles.cardTitle}>{item.title}</Text>
-                    <Text style={styles.cardDescription}>{item.description}</Text>
-                  </View>
-                  <View style={styles.statusContainer}>
-                    <Ionicons 
-                      name={getStatusIcon(item.status) as any} 
-                      size={20} 
-                      color={getStatusColor(item.status)} 
-                    />
-                  </View>
-                </View>
-                <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
-                  {getStatusText(item.status)}
-                </Text>
-              </TouchableOpacity>
+            ))
+          ) : (
+            <View style={styles.emptyState}>
+              <Ionicons name="time-outline" size={32} color="#6B7280" />
+              <Text style={styles.emptyText}>No timeline data available</Text>
             </View>
-          ))}
+          )}
         </View>
       </ScrollView>
+
+      {/* Detail Modal */}
+      <Modal
+        visible={modalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setModalVisible(false)}
+      >
+        <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setModalVisible(false)}>
+          <View style={styles.modalContent}>
+            {selectedItem && (
+              <>
+                <View style={styles.modalHeader}>
+                  <View style={styles.modalIconWrap}>
+                    <Ionicons name={(selectedItem.type === 'medication' ? 'medical' : selectedItem.type === 'hydration' ? 'water' : 'notifications') as any} size={22} color="#1E3A8A" />
+                  </View>
+                  <Text style={styles.modalTitle}>{selectedItem.title}</Text>
+                </View>
+                <View style={styles.modalRow}>
+                  <Ionicons name="time" size={16} color="#6B7280" />
+                  <Text style={styles.modalRowText}>{selectedItem.time || 'N/A'}</Text>
+                </View>
+                <View style={styles.modalRow}>
+                  <Ionicons name={getStatusIcon(selectedItem.status) as any} size={16} color={getStatusColor(selectedItem.status)} />
+                  <Text style={[styles.modalRowText, { color: getStatusColor(selectedItem.status) }]}>{getStatusText(selectedItem.status)}</Text>
+                </View>
+                {!!(selectedItem.body || selectedItem.description) && (
+                  <Text style={styles.modalBody}>{selectedItem.body || selectedItem.description}</Text>
+                )}
+
+                {(selectedItem.status === 'upcoming' || selectedItem.status === 'pending') && (
+                  <TouchableOpacity style={styles.modalPrimaryButton} onPress={() => onSnooze(selectedItem)}>
+                    <Ionicons name="time" size={18} color="#FFFFFF" />
+                    <Text style={styles.modalPrimaryButtonText}>Snooze 10 minutes</Text>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity style={styles.modalCloseButton} onPress={() => setModalVisible(false)}>
+                  <Text style={styles.modalCloseButtonText}>Close</Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       <BottomNavigation currentRoute="timeline" />
     </SafeAreaView>
@@ -177,8 +214,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 20,
-    paddingBottom: 16,
+    paddingTop: 12,
+    paddingBottom: 12,
   },
   backButton: {
     width: 40,
@@ -201,33 +238,13 @@ const styles = StyleSheet.create({
   placeholder: {
     width: 40,
   },
-  dateHeader: {
-    backgroundColor: 'white',
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  dateText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1F2937',
-    marginBottom: 4,
-  },
-  progressText: {
-    fontSize: 14,
-    color: '#6B7280',
-  },
+  // removed date header to keep UI clean and avoid placeholder date
   timelineContainer: {
-    paddingBottom: 100,
+    paddingBottom: 80,
   },
   timelineItem: {
     flexDirection: 'row',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   timelineLeft: {
     alignItems: 'center',
@@ -235,7 +252,7 @@ const styles = StyleSheet.create({
     width: 60,
   },
   timeText: {
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '600',
     color: '#6B7280',
     marginBottom: 8,
@@ -260,7 +277,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: 'white',
     borderRadius: 12,
-    padding: 16,
+    padding: 14,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -270,7 +287,7 @@ const styles = StyleSheet.create({
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   cardIcon: {
     width: 32,
@@ -285,13 +302,13 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   cardTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '600',
     color: '#1F2937',
     marginBottom: 2,
   },
   cardDescription: {
-    fontSize: 14,
+    fontSize: 13,
     color: '#6B7280',
   },
   statusContainer: {
@@ -299,6 +316,113 @@ const styles = StyleSheet.create({
   },
   statusText: {
     fontSize: 12,
+    fontWeight: '500',
+  },
+  actionsRow: {
+    flexDirection: 'row',
+    marginTop: 8,
+  },
+  actionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+  },
+  actionText: {
+    color: '#1E3A8A',
+    fontSize: 12,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  emptyState: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 24,
+  },
+  emptyText: {
+    marginTop: 8,
+    color: '#6B7280',
+    fontSize: 14,
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  modalContent: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    width: '100%',
+    maxWidth: 420,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 6,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  modalIconWrap: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: '#EBF8FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 10,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+    flex: 1,
+  },
+  modalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 6,
+    gap: 8,
+  },
+  modalRowText: {
+    fontSize: 13,
+    color: '#4B5563',
+  },
+  modalBody: {
+    fontSize: 13,
+    color: '#374151',
+    lineHeight: 20,
+    marginTop: 8,
+    marginBottom: 12,
+  },
+  modalPrimaryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#1E3A8A',
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    alignSelf: 'flex-start',
+  },
+  modalPrimaryButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  modalCloseButton: {
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  modalCloseButtonText: {
+    color: '#6B7280',
+    fontSize: 13,
     fontWeight: '500',
   },
 });

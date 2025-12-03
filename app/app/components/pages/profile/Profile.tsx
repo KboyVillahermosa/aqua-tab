@@ -1,70 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import BottomNavigation from '../../navigation/BottomNavigation';
-
-interface User {
-  name: string;
-  email: string;
-  phone?: string;
-  dateOfBirth?: string;
-  bloodType?: string;
-  allergies?: string;
-  emergencyContact?: string;
-}
+import useUser from '../../../hooks/useUser';
+import EditProfileModal from './EditProfileModal';
 
 export default function Profile() {
   const router = useRouter();
   const { token } = useLocalSearchParams();
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    console.log('Profile: token=', token);
-    
-    const fetchUserData = async () => {
-      try {
-        console.log('Profile: Making API call with token:', token);
-        const response = await fetch('https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api/me', {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${token}`,
-          },
-        });
-
-        console.log('Profile: Response status:', response.status);
-        
-        if (response.ok) {
-          const userData = await response.json();
-          console.log('Profile: User data received:', userData);
-          setUser({
-            name: userData.name,
-            email: userData.email,
-            phone: userData.phone || '+1 (555) 123-4567',
-            dateOfBirth: userData.date_of_birth || 'January 15, 1990',
-            bloodType: userData.blood_type || 'O+',
-            allergies: userData.allergies || 'Penicillin, Peanuts',
-            emergencyContact: userData.emergency_contact || 'Jane Doe - (555) 987-6543'
-          });
-        } else {
-          const errorData = await response.text();
-          console.log('Profile: Error response:', errorData);
-          Alert.alert('Error', 'Failed to fetch user data');
-        }
-      } catch (error) {
-        console.error('Profile: Error fetching user data:', error);
-        Alert.alert('Error', 'Network error occurred');
-      } finally {
-        setLoading(false);
-      }
-    };
-    
-    if (token) {
-      fetchUserData();
-    }
-  }, [token]);
+  const { user, loading, reload, setUser } = useUser(token as string | undefined);
+  const [editVisible, setEditVisible] = React.useState(false);
+  const insets = useSafeAreaInsets();
 
   const profileOptions = [
     {
@@ -79,51 +27,43 @@ export default function Profile() {
       title: 'Medical History',
       subtitle: 'View and update medical records',
       icon: 'medical-outline',
-      action: () => console.log('Medical history')
+      action: () => router.push({ pathname: '/components/pages/profile/MedicalHistory', params: { token } } as any)
     },
     {
       id: 3,
       title: 'Notifications',
       subtitle: 'Manage notification preferences',
       icon: 'notifications-outline',
-      action: () => console.log('Notifications')
+      action: () => router.push({ pathname: '/components/pages/profile/NotificationSettings', params: { token } } as any)
     },
     {
       id: 4,
       title: 'Privacy & Security',
       subtitle: 'Security settings and privacy',
       icon: 'shield-outline',
-      action: () => console.log('Privacy settings')
+      action: () => router.push({ pathname: '/components/pages/profile/PrivacySecurity', params: { token } } as any)
     },
     {
       id: 5,
       title: 'Premium Subscription',
       subtitle: 'Unlock more features',
       icon: 'star-outline',
-      action: () => router.push({ pathname: '/components/pages/subscription/Subscription', params: { token } } as any)
+      action: () => router.push({ pathname: '/components/pages/profile/Premium', params: { token } } as any)
     },
     {
       id: 6,
       title: 'Help & Support',
       subtitle: 'Get help and contact support',
       icon: 'help-circle-outline',
-      action: () => console.log('Help & support')
+      action: () => router.push({ pathname: '/components/pages/profile/HelpSupport', params: { token } } as any)
     },
   ];
 
   const retryFetch = () => {
-    setLoading(true);
-    setUser(null);
-    // Trigger useEffect by updating a state that doesn't affect the token dependency
-    setTimeout(() => {
-      if (token) {
-        // This will trigger the useEffect again
-        setLoading(true);
-      }
-    }, 100);
+    reload();
   };
 
-  const getInitials = (name: string) => {
+  const getInitials = (name: string = '') => {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
   };
 
@@ -152,9 +92,14 @@ export default function Profile() {
 
   return (
     <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={{ paddingBottom: 56 }}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* Header */}
-        <View style={styles.header}>
+        <View style={[styles.header, { paddingTop: (insets.top || 12) }]}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="#1F2937" />
           </TouchableOpacity>
@@ -170,7 +115,7 @@ export default function Profile() {
             <View style={styles.avatar}>
               <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
             </View>
-            <TouchableOpacity style={styles.cameraButton}>
+            <TouchableOpacity style={styles.cameraButton} onPress={() => setEditVisible(true)}>
               <Ionicons name="camera" size={16} color="white" />
             </TouchableOpacity>
           </View>
@@ -193,20 +138,7 @@ export default function Profile() {
           </View>
         </View>
 
-        {/* Onboarding Data Preview */}
-        <TouchableOpacity 
-          style={styles.onboardingCard}
-          onPress={() => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)}
-        >
-          <View style={styles.onboardingHeader}>
-            <Ionicons name="information-circle-outline" size={24} color="#1E3A8A" />
-            <Text style={styles.onboardingTitle}>View Complete Profile Details</Text>
-            <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-          </View>
-          <Text style={styles.onboardingSubtitle}>
-            See all your health information, daily routine, and app settings
-          </Text>
-        </TouchableOpacity>
+        {/* Removed onboarding preview - profile details moved to Personal Information page */}
 
         {/* Profile Options */}
         <View style={styles.optionsContainer}>
@@ -224,22 +156,7 @@ export default function Profile() {
           ))}
         </View>
 
-        {/* Emergency Contact */}
-        <View style={styles.emergencyContainer}>
-          <Text style={styles.emergencyTitle}>Emergency Contact</Text>
-          <View style={styles.emergencyCard}>
-            <View style={styles.emergencyIcon}>
-              <Ionicons name="call" size={20} color="#EF4444" />
-            </View>
-            <View style={styles.emergencyContent}>
-              <Text style={styles.emergencyName}>Emergency Contact</Text>
-              <Text style={styles.emergencyDetails}>{user.emergencyContact}</Text>
-            </View>
-            <TouchableOpacity style={styles.callButton}>
-              <Ionicons name="call" size={16} color="white" />
-            </TouchableOpacity>
-          </View>
-        </View>
+        {/* Emergency contact moved to Personal Information page */}
 
         {/* Logout Button */}
         <TouchableOpacity 
@@ -263,6 +180,14 @@ export default function Profile() {
           <Text style={styles.logoutText}>Sign Out</Text>
         </TouchableOpacity>
       </ScrollView>
+
+      <EditProfileModal
+        visible={editVisible}
+        onClose={() => setEditVisible(false)}
+        user={user}
+        token={token as string}
+        onSaved={(updated) => setUser && setUser(updated)}
+      />
 
       <BottomNavigation currentRoute="profile" />
     </SafeAreaView>

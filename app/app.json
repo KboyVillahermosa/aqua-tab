@@ -1,10 +1,10 @@
 {
   "expo": {
-    "name": "app",
-    "slug": "app",
+    "name": "AQUATAB",
+    "slug": "AQUATAB",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/mainlogo.png",
+    "icon": "./app/assets/images/splash-icon.png", 
     "scheme": "app",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -12,37 +12,32 @@
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/mainbackground.png",
-        "backgroundImage": "./assets/images/mainbackground.png",
-        "monochromeImage": "./assets/images/mainbackground.png"
-      },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "adaptiveIcon": {  
+        "foregroundImage": "./app/assets/images/splash-icon.png",
+        "backgroundColor": "#1E3A8A"
+      }
     },
     "web": {
       "output": "static",
-      "favicon": "./assets/images/mainlogo.png"
+      "favicon": "./app/assets/images/icon.png"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/mainsplash.png",
+          "image": "./app/assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#1E3A8A",
-          "dark": {
-            "backgroundColor": "#1E3A8A"
-          }
+          "backgroundColor": "#1E3A8A" 
         }
       ],
       "expo-web-browser"
     ],
     "splash": {
-      "image": "./assets/images/splash-icon.png",
+      "image": "./app/assets/images/splash-icon.png",
       "resizeMode": "contain",
       "backgroundColor": "#1E3A8A"
     },
