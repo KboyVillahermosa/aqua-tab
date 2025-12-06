@@ -13,16 +13,26 @@ class MedicationHistory extends Model
 
     protected $fillable = [
         'medication_id',
+        'user_id',
         'status',
+        'scheduled_time',
+        'taken_time',
         'time',
     ];
 
     protected $casts = [
         'time' => 'datetime',
+        'scheduled_time' => 'datetime',
+        'taken_time' => 'datetime',
     ];
 
     public function medication()
     {
         return $this->belongsTo(Medication::class);
+    }
+
+    public function user()
+    {
+        return $this->belongsTo(User::class);
     }
 }

@@ -16,6 +16,8 @@ interface UserDetails {
   address?: string;
   nickname?: string;
   emergency_contact?: string;
+  emergency_contact_name?: string;
+  emergency_contact_phone?: string;
   first_medication_time?: string;
   end_of_day_time?: string;
   wake_up_time?: string;
@@ -42,6 +44,7 @@ export default function ProfileDetails() {
   const user = fetchedUser as unknown as UserDetails | null;
 
   const [modalVisible, setModalVisible] = React.useState(false);
+  const [showEmergencyContactName, setShowEmergencyContactName] = React.useState(false);
 
   const openEditModal = () => setModalVisible(true);
   const closeEditModal = () => setModalVisible(false);
@@ -77,6 +80,34 @@ export default function ProfileDetails() {
   const formatGender = (gender: string | undefined) => {
     if (!gender) return 'Not set';
     return gender.charAt(0).toUpperCase() + gender.slice(1);
+  };
+
+  const formatEmergencyContact = (
+    contact?: string,
+    contactName?: string,
+    contactPhone?: string,
+  ) => {
+    if (contactName && contactPhone) return `${contactName} (${contactPhone})`;
+    if (contactName) return contactName;
+    if (contactPhone) return contactPhone;
+    if (contact) return contact;
+    return null;
+  };
+
+  const calculateAge = (dateOfBirth?: string): string | null => {
+    if (!dateOfBirth) return null;
+    try {
+      const birthDate = new Date(dateOfBirth);
+      const today = new Date();
+      let age = today.getFullYear() - birthDate.getFullYear();
+      const monthDiff = today.getMonth() - birthDate.getMonth();
+      if (monthDiff < 0 || (monthDiff === 0 && today.getDate() < birthDate.getDate())) {
+        age--;
+      }
+      return `${age} years old`;
+    } catch {
+      return null;
+    }
   };
 
   if (loading) {
@@ -125,19 +156,34 @@ export default function ProfileDetails() {
             sections={[
               {
                 rows: [
-                { label: 'Full Name', value: user.name },
-                { label: 'Nickname', value: user.nickname },
-                { label: 'Email', value: user.email },
-                { label: 'Phone', value: user.phone },
-                { label: 'Gender', value: formatGender(user.gender) },
-                { label: 'Date of Birth', value: user.date_of_birth },
-                { label: 'Age', value: user.age ? `${user.age} years old` : null },
-                { label: 'Address', value: user.address },
-                { label: 'Emergency Contact', value: user.emergency_contact },
-              ],
-            },
-          ]}
-        />
+                  { label: 'Full Name', value: user.name },
+                  { label: 'Nickname', value: user.nickname },
+                  { label: 'Email', value: user.email },
+                  { label: 'Phone', value: user.phone },
+                  { label: 'Gender', value: formatGender(user.gender) },
+                  { label: 'Date of Birth', value: user.date_of_birth },
+                  { label: 'Age', value: calculateAge(user.date_of_birth) },
+                  { label: 'Address', value: user.address },
+                ],
+              },
+            ]}
+          />
+
+          {/* Emergency Contact Custom Display */}
+          <View style={[styles.card, { marginTop: 12 }]}>
+            <TouchableOpacity 
+              style={styles.infoRow}
+              onPress={() => setShowEmergencyContactName(!showEmergencyContactName)}
+            >
+              <Text style={styles.infoLabel}>Emergency Contact</Text>
+              <Text style={styles.infoValue}>
+                {showEmergencyContactName 
+                  ? (user.emergency_contact_name || 'Not set')
+                  : (user.emergency_contact_phone || 'Not set')
+                }
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Health Information Section */}

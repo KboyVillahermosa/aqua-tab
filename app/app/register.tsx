@@ -383,6 +383,17 @@ export default function Register() {
           </View>
         </Modal>
 
+        {/* Medication Adherence Section */}
+        <View style={styles.medicationSection}>
+          <View style={styles.medicationHeader}>
+            <Ionicons name="medical" size={20} color="#1E3A8A" style={styles.medicationIcon} />
+            <Text style={styles.medicationText}>Never miss a dose</Text>
+          </View>
+          <Text style={styles.medicationDescription}>
+            We'll help you stay on track with your medications and health goals.
+          </Text>
+        </View>
+
         {/* Terms Checkbox */}
         <TouchableOpacity style={styles.termsContainer} onPress={() => setAgreeTerms(!agreeTerms)}>
           <View style={[styles.checkbox, agreeTerms && styles.checkboxChecked]}>
@@ -518,6 +529,32 @@ const styles = StyleSheet.create({
   },
   eyeIcon: {
     padding: 4,
+  },
+  medicationSection: {
+    backgroundColor: '#F0F9FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+    borderLeftWidth: 4,
+    borderLeftColor: '#1E3A8A',
+  },
+  medicationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  medicationIcon: {
+    marginRight: 12,
+  },
+  medicationText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#1E3A8A',
+  },
+  medicationDescription: {
+    fontSize: 14,
+    color: '#6B7280',
+    lineHeight: 20,
   },
   termsContainer: {
     flexDirection: 'row',

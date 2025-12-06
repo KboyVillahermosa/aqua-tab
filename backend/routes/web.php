@@ -24,13 +24,19 @@ Route::prefix('admin')->name('admin.')->group(function () {
     Route::middleware('guest')->group(function () {
         Route::get('login', [AdminController::class, 'showLoginForm'])->name('login');
         Route::post('login', [AdminController::class, 'login']);
+
+        // Password Reset Routes
+        Route::get('forgot-password', [AdminController::class, 'showForgotPasswordForm'])->name('password.request');
+        Route::post('forgot-password', [AdminController::class, 'sendResetLink'])->name('password.email');
+        Route::get('reset-password/{token}', [AdminController::class, 'showResetPasswordForm'])->name('password.reset');
+        Route::post('reset-password', [AdminController::class, 'resetPassword'])->name('password.update');
     });
 
     // Authenticated admin routes
     Route::middleware(['auth', \App\Http\Middleware\AdminMiddleware::class])->group(function () {
         Route::get('dashboard', [AdminController::class, 'dashboard'])->name('dashboard');
         Route::post('logout', [AdminController::class, 'logout'])->name('logout');
-        
+
         // User management
         Route::get('users', [AdminController::class, 'index'])->name('users.index');
         Route::get('users/create', [AdminController::class, 'createUser'])->name('users.create');
@@ -39,7 +45,13 @@ Route::prefix('admin')->name('admin.')->group(function () {
         Route::get('users/{user}/edit', [AdminController::class, 'editUser'])->name('users.edit');
         Route::put('users/{user}', [AdminController::class, 'updateUser'])->name('users.update');
         Route::delete('users/{user}', [AdminController::class, 'deleteUser'])->name('users.destroy');
-        
+
+        // User management - new actions
+        Route::post('users/{user}/send-password-reset', [AdminController::class, 'sendPasswordResetEmail'])->name('users.send-password-reset');
+        Route::post('users/{user}/update-status', [AdminController::class, 'updateStatus'])->name('users.update-status');
+        Route::get('users/{user}/activity-log', [AdminController::class, 'getActivityLog'])->name('users.activity-log');
+        Route::get('users/{user}/transaction-history', [AdminController::class, 'getTransactionHistory'])->name('users.transaction-history');
+
         // Health module management
         Route::get('hydration', [AdminController::class, 'hydration'])->name('hydration.index');
         Route::get('medication', [AdminController::class, 'medication'])->name('medication.index');

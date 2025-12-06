@@ -31,8 +31,10 @@ Route::get('admin/dashboard-stats', [App\Http\Controllers\AdminController::class
 Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::post('logout', [AuthController::class, 'logout']);
     Route::get('me', [AuthController::class, 'me']);
+    Route::put('me', [AuthController::class, 'update']);
 
     // Onboarding endpoints
+    Route::get('onboarding', [App\Http\Controllers\OnboardingController::class, 'show']);
     Route::get('onboarding/status', [App\Http\Controllers\OnboardingController::class, 'status']);
     Route::put('onboarding/update', [App\Http\Controllers\OnboardingController::class, 'update']);
     Route::post('onboarding/complete', [App\Http\Controllers\OnboardingController::class, 'complete']);

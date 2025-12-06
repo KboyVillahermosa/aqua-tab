@@ -45,11 +45,18 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         return;
       }
 
+      const weightValue =
+        editData.weight === undefined || editData.weight === null || editData.weight === ''
+          ? null
+          : Number(editData.weight);
+
       const payload = {
         name: editData.name.trim(),
         email: editData.email.trim(),
         phone: editData.phone || null,
         emergency_contact: editData.emergency_contact || null,
+        emergency_contact_name: editData.emergency_contact_name || null,
+        emergency_contact_phone: editData.emergency_contact_phone || null,
         nickname: editData.nickname || null,
         gender: editData.gender || null,
         date_of_birth: editData.date_of_birth || null,
@@ -62,12 +69,9 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
         end_of_day_time: editData.end_of_day_time || null,
         climate: editData.climate || null,
         exercise_frequency: editData.exercise_frequency || null,
-        weight: editData.weight || null,
+        weight: Number.isFinite(weightValue) ? weightValue : null,
         weight_unit: editData.weight_unit || null,
         age: editData.age || null,
-        reminder_tone: editData.reminder_tone || null,
-        notification_permissions_accepted: typeof editData.notification_permissions_accepted === 'boolean' ? editData.notification_permissions_accepted : null,
-        battery_optimization_set: typeof editData.battery_optimization_set === 'boolean' ? editData.battery_optimization_set : null,
       };
 
       const resp = await api.put('/me', payload, token as string);
@@ -127,8 +131,8 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
           </View>
 
           <View style={styles.formGroup}>
-            <Text style={styles.formLabel}>Emergency Contact</Text>
-            <TextInput style={styles.input} value={editData.emergency_contact || ''} onChangeText={(t) => setEditData({ ...editData, emergency_contact: t })} placeholder="Name - phone number" placeholderTextColor="#D1D5DB" />
+            <Text style={styles.formLabel}>Nickname</Text>
+            <TextInput style={styles.input} value={editData.nickname || ''} onChangeText={(t) => setEditData({ ...editData, nickname: t })} placeholder="What should we call you?" placeholderTextColor="#D1D5DB" />
           </View>
 
           <View style={styles.formGroup}>
@@ -144,6 +148,98 @@ export default function EditProfileModal({ visible, onClose, token, user, onSave
           <View style={styles.formGroup}>
             <Text style={styles.formLabel}>Address</Text>
             <TextInput style={[styles.input, styles.textArea]} value={editData.address || ''} onChangeText={(t) => setEditData({ ...editData, address: t })} placeholder="Enter address" placeholderTextColor="#D1D5DB" multiline numberOfLines={3} />
+          </View>
+
+          <Text style={styles.sectionHeader}>Emergency Contact</Text>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Contact Name</Text>
+            <TextInput style={styles.input} value={editData.emergency_contact_name || ''} onChangeText={(t) => setEditData({ ...editData, emergency_contact_name: t })} placeholder="Contact name" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Contact Phone</Text>
+            <TextInput style={styles.input} value={editData.emergency_contact_phone || ''} onChangeText={(t) => setEditData({ ...editData, emergency_contact_phone: t })} placeholder="Contact phone" placeholderTextColor="#D1D5DB" keyboardType="phone-pad" />
+          </View>
+
+          <Text style={styles.sectionHeader}>Daily Routine</Text>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Wake Up Time</Text>
+            <TextInput style={styles.input} value={editData.wake_up_time || ''} onChangeText={(t) => setEditData({ ...editData, wake_up_time: t })} placeholder="e.g., 6:30 AM" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>First Medication Time</Text>
+            <TextInput style={styles.input} value={editData.first_medication_time || ''} onChangeText={(t) => setEditData({ ...editData, first_medication_time: t })} placeholder="e.g., 7:00 AM" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Breakfast Time</Text>
+            <TextInput style={styles.input} value={editData.breakfast_time || ''} onChangeText={(t) => setEditData({ ...editData, breakfast_time: t })} placeholder="e.g., 8:00 AM" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Lunch Time</Text>
+            <TextInput style={styles.input} value={editData.lunch_time || ''} onChangeText={(t) => setEditData({ ...editData, lunch_time: t })} placeholder="e.g., 12:30 PM" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Dinner Time</Text>
+            <TextInput style={styles.input} value={editData.dinner_time || ''} onChangeText={(t) => setEditData({ ...editData, dinner_time: t })} placeholder="e.g., 7:00 PM" placeholderTextColor="#D1D5DB" />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>End of Day Time</Text>
+            <TextInput style={styles.input} value={editData.end_of_day_time || ''} onChangeText={(t) => setEditData({ ...editData, end_of_day_time: t })} placeholder="e.g., 10:30 PM" placeholderTextColor="#D1D5DB" />
+          </View>
+
+          <Text style={styles.sectionHeader}>Health & Goals</Text>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Weight</Text>
+            <View style={styles.row}>
+              <TextInput
+                style={[styles.input, { flex: 1, marginRight: 8 }]}
+                value={editData.weight !== undefined && editData.weight !== null ? String(editData.weight) : ''}
+                onChangeText={(t) => setEditData({ ...editData, weight: t })}
+                placeholder="e.g., 70"
+                placeholderTextColor="#D1D5DB"
+                keyboardType="numeric"
+              />
+              <View style={[styles.row, { flexShrink: 0 }]}>
+                {['kg', 'lbs'].map((unit) => (
+                  <TouchableOpacity
+                    key={unit}
+                    style={[styles.pill, editData.weight_unit === unit && styles.pillActive]}
+                    onPress={() => setEditData({ ...editData, weight_unit: unit })}
+                  >
+                    <Text style={[styles.pillText, editData.weight_unit === unit && styles.pillTextActive]}>{unit.toUpperCase()}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </View>
+          </View>
+
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Climate</Text>
+            <View style={styles.row}>
+              {['hot', 'temperate', 'cold'].map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.pill, editData.climate === option && styles.pillActive]}
+                  onPress={() => setEditData({ ...editData, climate: option })}
+                >
+                  <Text style={[styles.pillText, editData.climate === option && styles.pillTextActive]}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Exercise Frequency</Text>
+            <View style={styles.row}>
+              {['rarely', 'sometimes', 'regularly', 'often'].map((option) => (
+                <TouchableOpacity
+                  key={option}
+                  style={[styles.pill, editData.exercise_frequency === option && styles.pillActive]}
+                  onPress={() => setEditData({ ...editData, exercise_frequency: option })}
+                >
+                  <Text style={[styles.pillText, editData.exercise_frequency === option && styles.pillTextActive]}>{option}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
 
           <View style={{ height: 40 }} />
@@ -169,4 +265,10 @@ const styles = StyleSheet.create({
   formLabel: { fontSize: 14, fontWeight: '600', color: '#374151', marginBottom: 8 },
   input: { backgroundColor: 'white', borderWidth: 1, borderColor: '#D1D5DB', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: '#1F2937' },
   textArea: { textAlignVertical: 'top', paddingTop: 12 },
+  sectionHeader: { fontSize: 16, fontWeight: '700', color: '#1F2937', marginBottom: 8, marginTop: 12 },
+  row: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap' },
+  pill: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 12, borderWidth: 1, borderColor: '#D1D5DB', marginRight: 8, marginTop: 8 },
+  pillActive: { backgroundColor: '#1E3A8A', borderColor: '#1E3A8A' },
+  pillText: { color: '#1F2937', fontWeight: '600' },
+  pillTextActive: { color: 'white' },
 });

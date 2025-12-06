@@ -16,6 +16,9 @@ class Notification extends Model
         'body',
         'scheduled_time',
         'status',
+        'opened_at',
+        'actioned_at',
+        'error_message',
         'data',
         'completed_at',
         'missed_at',
@@ -23,6 +26,8 @@ class Notification extends Model
 
     protected $casts = [
         'scheduled_time' => 'datetime',
+        'opened_at' => 'datetime',
+        'actioned_at' => 'datetime',
         'completed_at' => 'datetime',
         'missed_at' => 'datetime',
         'data' => 'array',
@@ -91,13 +96,13 @@ class Notification extends Model
     {
         $now = now();
         $scheduled = $this->scheduled_time;
-        
+
         if ($scheduled < $now) {
             return null; // Already passed
         }
-        
+
         $diff = $scheduled->diffInMinutes($now);
-        
+
         if ($diff < 60) {
             return $diff . ' minutes';
         } elseif ($diff < 1440) { // Less than 24 hours

@@ -1,6 +1,6 @@
 @extends('layouts.auth')
 
-@section('title', 'Admin Login')
+@section('title', 'Forgot Password')
 
 @section('content')
 <style>
@@ -204,7 +204,7 @@
                 <div class="flex justify-center mb-4">
                     <img src="{{ asset('images/mainlogo.png') }}" alt="AQUATAB Logo" class="h-20 w-auto">
                 </div>
-                <h1 class="text-2xl font-bold text-white tracking-tight">Admin Login</h1>
+                <h1 class="text-2xl font-bold text-white tracking-tight">Reset Password</h1>
             </div>
 
             @if ($errors->any())
@@ -214,8 +214,12 @@
                         d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
                 <div>
-                    <h3 class="text-sm font-semibold text-red-300">Login Failed</h3>
-                    <p class="text-xs text-red-400 mt-1">{{ $errors->first() }}</p>
+                    <h3 class="text-sm font-semibold text-red-300">Error</h3>
+                    <p class="text-xs text-red-400 mt-1">
+                        @foreach ($errors->all() as $error)
+                        {{ $error }}<br>
+                        @endforeach
+                    </p>
                 </div>
             </div>
             @endif
@@ -233,20 +237,7 @@
             </div>
             @endif
 
-            @if (session('error'))
-            <div class="mb-6 p-3 bg-red-900/20 border border-red-600/30 rounded-lg flex items-start gap-2">
-                <svg class="w-5 h-5 text-red-400 mt-0.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                        d="M12 8v4m0 4v.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div>
-                    <h3 class="text-sm font-semibold text-red-300">Error</h3>
-                    <p class="text-xs text-red-400 mt-1">{{ session('error') }}</p>
-                </div>
-            </div>
-            @endif
-
-            <form method="POST" action="{{ route('admin.login') }}" class="space-y-4">
+            <form method="POST" action="{{ route('admin.password.email') }}" class="space-y-4">
                 @csrf
 
                 <!-- Email -->
@@ -261,59 +252,24 @@
                         </div>
                         <input type="email" id="email" name="email" value="{{ old('email') }}" required autofocus
                             placeholder="admin@aqua.com"
-                            class="block w-full p10 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
+                            class="block w-full pl-14 pr-4 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
                     </div>
                     @error('email')
                     <p class="text-xs text-red-400 mt-1">{{ $message }}</p>
                     @enderror
                 </div>
 
-                <!-- Password -->
-                <div class="space-y-2">
-                    <label for="password" class="text-sm font-semibold text-slate-200">Password</label>
-                    <div class="relative">
-                        <div class="absolute inset-y-0 left-0 w-10 flex items-center justify-center pointer-events-none">
-                            <svg class="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                            </svg>
-                        </div>
-                        <input type="password" id="password" name="password" required placeholder="••••••••"
-                            class="block w-full pl-14 pr-12 py-3 border border-gray-300 rounded-xl bg-white text-black placeholder-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm">
-                        <button type="button" id="togglePassword"
-                            class="absolute inset-y-0 right-0 pr-3 flex items-center text-slate-500 hover:text-slate-700 focus:outline-none">
-                            <svg id="eyeOpen" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                            </svg>
-                            <svg id="eyeClosed" class="h-5 w-5 hidden" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M3 3l18 18" />
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
-                                    d="M9.878 9.878a3 3 0 104.243 4.243" />
-                            </svg>
-                        </button>
-                    </div>
-                    @error('password')
-                    <p class="text-xs text-red-400 mt-1">{{ $message }}</p>
-                    @enderror
-                </div>
-
-                <!-- Remember & Forgot -->
-                <div class="flex items-center justify-between text-sm">
-                    <label class="flex items-center gap-2 text-slate-200 cursor-pointer">
-                        <input type="checkbox" name="remember" class="h-4 w-4 rounded border-slate-600 bg-slate-800 text-blue-500 focus:ring-2 focus:ring-blue-500 focus:ring-offset-0 transition-colors">
-                        <span class="select-none">Remember Me</span>
-                    </label>
-                    <a href="{{ route('admin.password.request') }}" class="text-blue-400 hover:text-blue-300 font-semibold transition-colors">Forgot Password?</a>
-                </div>
-
                 <!-- Submit -->
-                <button type="submit" id="signinButton" class="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all transform hover:shadow-lg disabled:opacity-70 disabled:cursor-not-allowed">
-                    <span id="signinText">Sign In</span>
+                <button type="submit" id="submitBtn" class="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-bold text-white bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-all transform hover:shadow-lg disabled:opacity-70 disabled:cursor-not-allowed">
+                    <span id="submitText">Send Reset Link</span>
                 </button>
+
+                <!-- Back to Login -->
+                <div class="text-center mt-6">
+                    <a href="{{ route('admin.login') }}" class="text-sm text-blue-400 hover:text-blue-300 font-semibold transition-colors">
+                        ← Back to Login
+                    </a>
+                </div>
             </form>
         </div>
     </div>
@@ -325,28 +281,11 @@
 </div>
 
 <script>
-    // Password visibility toggle
-    (function() {
-        const passwordInput = document.getElementById('password');
-        const toggleBtn = document.getElementById('togglePassword');
-        const eyeOpen = document.getElementById('eyeOpen');
-        const eyeClosed = document.getElementById('eyeClosed');
-
-        if (toggleBtn && passwordInput && eyeOpen && eyeClosed) {
-            toggleBtn.addEventListener('click', function() {
-                const isPassword = passwordInput.type === 'password';
-                passwordInput.type = isPassword ? 'text' : 'password';
-                eyeOpen.classList.toggle('hidden', isPassword);
-                eyeClosed.classList.toggle('hidden', !isPassword);
-            });
-        }
-    })();
-
     // Loading state on form submit
     (function() {
-        const form = document.querySelector('form[action*="admin.login"]');
-        const button = document.getElementById('signinButton');
-        const buttonText = document.getElementById('signinText');
+        const form = document.querySelector('form[action*="admin.password.email"]');
+        const button = document.getElementById('submitBtn');
+        const buttonText = document.getElementById('submitText');
 
         if (form && button && buttonText) {
             form.addEventListener('submit', function(e) {
@@ -356,7 +295,7 @@
                 }
 
                 button.disabled = true;
-                buttonText.textContent = 'Signing in…';
+                buttonText.textContent = 'Sending…';
 
                 const spinner = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
                 spinner.setAttribute('class', 'animate-spin h-5 w-5 text-white');

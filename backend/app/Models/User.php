@@ -23,6 +23,7 @@ class User extends Authenticatable
         'password',
         'api_token',
         'role',
+        'status',
         'phone',
         'date_of_birth',
         'gender',
@@ -49,6 +50,11 @@ class User extends Authenticatable
         'notification_permissions_accepted',
         'battery_optimization_set',
         'hydration_goal',
+        'last_login_at',
+        'last_login_ip',
+        'last_sync_at',
+        'last_app_version',
+        'medical_history',
     ];
 
     /**
@@ -95,6 +101,31 @@ class User extends Authenticatable
         return $this->hasOne(Subscription::class)
             ->where('status', 'active')
             ->where('ends_at', '>', now());
+    }
+
+    public function activityLogs()
+    {
+        return $this->hasMany(UserActivityLog::class);
+    }
+
+    public function subscriptionTransactions()
+    {
+        return $this->hasMany(SubscriptionTransaction::class);
+    }
+
+    public function hydrationEntries()
+    {
+        return $this->hasMany(HydrationEntry::class);
+    }
+
+    public function medicationHistory()
+    {
+        return $this->hasMany(MedicationHistory::class);
+    }
+
+    public function notifications()
+    {
+        return $this->hasMany(Notification::class);
     }
 
     public function hasActiveSubscription(): bool

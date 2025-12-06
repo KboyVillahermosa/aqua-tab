@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, TextInput, Alert, Platform, Modal } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import * as Contacts from 'expo-contacts';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as api from './api';
 
@@ -19,9 +20,6 @@ interface OnboardingData {
   exercise_frequency?: 'rarely' | 'sometimes' | 'regularly' | 'often';
   weight?: number;
   weight_unit?: 'kg' | 'lbs';
-  age?: number;
-  gender?: string;
-  year_of_birth?: number;
   reminder_tone?: string;
   notification_permissions_accepted?: boolean;
   battery_optimization_set?: boolean;
@@ -56,9 +54,7 @@ export default function Onboarding() {
   const [timePickerField, setTimePickerField] = useState<string | null>(null);
   const [tempTime, setTempTime] = useState<Date>(new Date());
   
-  // Year and age picker states
-  const [showYearPicker, setShowYearPicker] = useState(false);
-  const [showAgePicker, setShowAgePicker] = useState(false);
+  // Picker states
   const [showWeightPicker, setShowWeightPicker] = useState(false);
   
   // Audio state
@@ -67,25 +63,19 @@ export default function Onboarding() {
   const steps = [
     'nickname',
     'welcome',
-    'profile',
-    'emergency-contact',
-    'medication-time',
-    'wake-up',
-    'end-of-day',
-    'meal-times',
+    'weight',
     'climate',
     'exercise',
-    'weight',
-    'age',
+    'daily-start',
+    'end-of-day',
+    'meal-times',
     'reminder-tone',
+    'emergency-contact',
     'notifications',
     'complete'
   ];
 
   // Generate arrays for pickers
-  const currentYear = new Date().getFullYear();
-  const years = Array.from({ length: currentYear - 1900 + 1 }, (_, i) => currentYear - i);
-  const ages = Array.from({ length: 120 }, (_, i) => i + 1);
   const weights = Array.from({ length: 200 }, (_, i) => i + 20); // 20-219
 
   // Load saved data on mount
@@ -95,8 +85,25 @@ export default function Onboarding() {
         if (token) {
           const saved = await api.get('/onboarding', token);
           if (saved && typeof saved === 'object') {
+            // Extract the data object if nested
+            const dataToLoad = saved.data || saved;
+            const normalizedData: any = { ...dataToLoad };
+
+            // Map nested emergencyContact payload to flat fields if present
+            if (dataToLoad.emergencyContact) {
+              const { name, phone } = dataToLoad.emergencyContact;
+              if (!normalizedData.emergency_contact_name && name) {
+                normalizedData.emergency_contact_name = name;
+              }
+              if (!normalizedData.emergency_contact_phone && phone) {
+                normalizedData.emergency_contact_phone = phone;
+              }
+              // Drop the nested object to avoid confusion
+              delete normalizedData.emergencyContact;
+            }
+
             // Merge saved data with current data, preserving any existing values
-            setData(prev => ({ ...prev, ...saved }));
+            setData(prev => ({ ...prev, ...normalizedData }));
           }
         }
       } catch (err) {
@@ -194,8 +201,9 @@ export default function Onboarding() {
       const hour12 = hours === 0 ? 12 : hours > 12 ? hours - 12 : hours;
       const ampm = hours >= 12 ? 'PM' : 'AM';
       const timeString = `${hour12}:${minutes.toString().padStart(2, '0')} ${ampm}`;
-      updateData(timePickerField as keyof OnboardingData, timeString);
+      // Update both the temp time and the data immediately
       setTempTime(selectedTime);
+      updateData(timePickerField as keyof OnboardingData, timeString);
     }
     
     if (Platform.OS === 'ios') {
@@ -246,7 +254,7 @@ export default function Onboarding() {
   const nextStep = async () => {
     if (currentStep < steps.length - 1) {
       // Save data to backend on certain steps
-      if (['nickname', 'profile', 'emergency-contact', 'medication-time', 'wake-up', 'end-of-day', 'meal-times', 'climate', 'exercise', 'weight', 'age', 'reminder-tone'].includes(steps[currentStep])) {
+      if (['nickname', 'weight', 'climate', 'exercise', 'daily-start', 'end-of-day', 'meal-times', 'reminder-tone', 'emergency-contact'].includes(steps[currentStep])) {
         try {
           // Convert time fields to 24-hour format for backend
           const dataToSend = { ...data };
@@ -281,6 +289,33 @@ export default function Onboarding() {
       setCurrentStep(currentStep + 1);
     } else {
       completeOnboarding();
+    }
+  };
+
+  const pickEmergencyContact = async () => {
+    try {
+      const permission = await Contacts.requestPermissionsAsync();
+
+      if (permission.status !== 'granted') {
+        Alert.alert('Permission needed', 'Please allow contact access to pick someone automatically.');
+        return;
+      }
+
+      const contact = await Contacts.presentContactPickerAsync();
+
+      if (!contact) {
+        return;
+      }
+
+      const phone = contact.phoneNumbers?.[0]?.number;
+      updateData('emergency_contact_name', contact.name || '');
+
+      if (phone) {
+        updateData('emergency_contact_phone', phone);
+      }
+    } catch (err) {
+      console.log('Error selecting contact:', err);
+      Alert.alert('Could not open contacts', 'Please enter your emergency contact manually.');
     }
   };
 
@@ -330,7 +365,7 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.iconContainer}>
-              <Text style={styles.emoji}>☀️</Text>
+              <Ionicons name="sunny" size={64} color="#F5A623" />
             </View>
             <Text style={styles.title}>To start with, what should we call you?</Text>
             <TextInput
@@ -343,7 +378,7 @@ export default function Onboarding() {
             />
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
+                <Text style={styles.skipButtonText}>Skip for now</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
                 <Text style={styles.nextButtonText}>Next</Text>
@@ -356,61 +391,18 @@ export default function Onboarding() {
         return (
           <View style={styles.stepContainer}>
             <View style={styles.iconContainer}>
-              <Text style={styles.emoji}>🌱</Text>
+              <Text style={styles.emoji}>👋</Text>
             </View>
-            <Text style={styles.title}>Nice to Meet You, {data.nickname || userName}</Text>
+            <Text style={styles.title}>Nice to meet you, {data.nickname || 'there'}!</Text>
             <Text style={styles.description}>
-              We're here to support you on your health journey. Now let's quickly personalize the app for you.
+              By going forward, you agree to how we securely handle your data to personalize hydration, medication reminders, and wellness recommendations.
             </Text>
             <TouchableOpacity onPress={nextStep} style={styles.primaryButton}>
-              <Text style={styles.primaryButtonText}>Let's go</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case 'profile':
-        return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>Hi, {data.nickname || userName}! Tell us more about you</Text>
-            <Text style={styles.description}>
-              We ask you this to give you personalized tips for your health and well-being.
-            </Text>
-            
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Gender</Text>
-              <View style={styles.optionsRow}>
-                {['Male', 'Female', 'Other'].map((option) => (
-                  <TouchableOpacity
-                    key={option}
-                    style={[styles.optionButton, data.gender?.toLowerCase() === option.toLowerCase() && styles.optionButtonSelected]}
-                    onPress={() => updateData('gender', option.toLowerCase())}
-                  >
-                    <Text style={[styles.optionText, data.gender?.toLowerCase() === option.toLowerCase() && styles.optionTextSelected]}>
-                      {option}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+              <View style={styles.buttonWithIcon}>
+                <Text style={styles.primaryButtonText}>Let's go</Text>
+                <Ionicons name="hand-right-outline" size={20} color="#fff" style={{ marginLeft: 8 }} />
               </View>
-            </View>
-
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Year of birth</Text>
-              <TouchableOpacity onPress={() => setShowYearPicker(true)} style={styles.pickerButton}>
-                <Text style={[styles.pickerButtonText, !data.year_of_birth && styles.pickerPlaceholder]}>
-                  {data.year_of_birth || 'Select year'}
-                </Text>
-                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
+            </TouchableOpacity>
           </View>
         );
 
@@ -439,16 +431,20 @@ export default function Onboarding() {
               <Text style={styles.fieldLabel}>Phone Number</Text>
               <TextInput
                 style={styles.input}
-                placeholder="+63 912 345 6789"
+                placeholder="09123456789"
                 placeholderTextColor="#8E8E93"
                 keyboardType="phone-pad"
                 value={data.emergency_contact_phone || ''}
                 onChangeText={(text) => updateData('emergency_contact_phone', text)}
               />
             </View>
+            <TouchableOpacity onPress={pickEmergencyContact} style={styles.contactPickerButton}>
+              <Ionicons name="people-outline" size={20} color="#1E3A8A" />
+              <Text style={styles.contactPickerText}>Pick from contacts</Text>
+            </TouchableOpacity>
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
+                <Text style={styles.skipButtonText}>Skip for now</Text>
               </TouchableOpacity>
               <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
                 <Text style={styles.nextButtonText}>Next</Text>
@@ -457,48 +453,39 @@ export default function Onboarding() {
           </View>
         );
 
-      case 'medication-time':
+      case 'daily-start':
         return (
-          <View style={styles.stepContainer}>
-            <Text style={styles.title}>What time do you usually take your first medication?</Text>
-            <View style={styles.fieldRow}>
-              <Text style={styles.fieldLabel}>Time</Text>
-              <TouchableOpacity onPress={() => openTimePicker('first_medication_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.first_medication_time && styles.timeInputPlaceholder]}>
-                  {data.first_medication_time ? formatTime(data.first_medication_time) : '8:00 AM'}
-                </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        );
-
-      case 'wake-up':
-        return (
-          <View style={styles.stepContainer}>
+          <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContentInner}>
             <View style={styles.infoBox}>
               <Text style={styles.infoText}>
                 Getting hydrated <Text style={styles.highlight}>right after</Text> waking up will give you energy in the morning!
               </Text>
             </View>
-            <Text style={styles.title}>When do you usually wake up?</Text>
+            
+            <Text style={styles.sectionHeader}>When do you usually wake up?</Text>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Time</Text>
               <TouchableOpacity onPress={() => openTimePicker('wake_up_time')} style={styles.timeInputButton}>
                 <Text style={[styles.timeInputText, !data.wake_up_time && styles.timeInputPlaceholder]}>
                   {data.wake_up_time ? formatTime(data.wake_up_time) : '8:00 AM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
+
+            <View style={styles.sectionDivider} />
+
+            <Text style={styles.sectionHeader}>What time do you usually take your first medication?</Text>
+            <View style={styles.fieldRow}>
+              <Text style={styles.fieldLabel}>Time</Text>
+              <TouchableOpacity onPress={() => openTimePicker('first_medication_time')} style={styles.timeInputButton}>
+                <Text style={[styles.timeInputText, !data.first_medication_time && styles.timeInputPlaceholder]}>
+                  {data.first_medication_time ? formatTime(data.first_medication_time) : '8:00 AM'}
+                </Text>
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+
             <View style={styles.buttonRow}>
               <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
                 <Text style={styles.skipButtonText}>Skip</Text>
@@ -507,7 +494,7 @@ export default function Onboarding() {
                 <Text style={styles.nextButtonText}>Next</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </ScrollView>
         );
 
       case 'end-of-day':
@@ -551,28 +538,28 @@ export default function Onboarding() {
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Breakfast</Text>
               <TouchableOpacity onPress={() => openTimePicker('breakfast_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.breakfast_time && styles.timeInputPlaceholder]}>
-                  {data.breakfast_time ? formatTime(data.breakfast_time) : '8:30 AM'}
+                <Text style={[styles.timeInputText, !data.breakfast_time && styles.timeInputPlaceholder, !data.breakfast_time && { color: '#999' }]}>
+                  {data.breakfast_time ? formatTime(data.breakfast_time) : '8:00 AM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Lunch</Text>
               <TouchableOpacity onPress={() => openTimePicker('lunch_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.lunch_time && styles.timeInputPlaceholder]}>
+                <Text style={[styles.timeInputText, !data.lunch_time && styles.timeInputPlaceholder, !data.lunch_time && { color: '#999' }]}>
                   {data.lunch_time ? formatTime(data.lunch_time) : '12:00 PM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
             <View style={styles.fieldRow}>
               <Text style={styles.fieldLabel}>Dinner</Text>
               <TouchableOpacity onPress={() => openTimePicker('dinner_time')} style={styles.timeInputButton}>
-                <Text style={[styles.timeInputText, !data.dinner_time && styles.timeInputPlaceholder]}>
+                <Text style={[styles.timeInputText, !data.dinner_time && styles.timeInputPlaceholder, !data.dinner_time && { color: '#999' }]}>
                   {data.dinner_time ? formatTime(data.dinner_time) : '7:00 PM'}
                 </Text>
-                <Ionicons name="time-outline" size={20} color="#FFFFFF" />
+                <Ionicons name="time-outline" size={20} color="#6B7280" />
               </TouchableOpacity>
             </View>
             <View style={styles.buttonRow}>
@@ -708,34 +695,6 @@ export default function Onboarding() {
           </View>
         );
 
-      case 'age':
-        return (
-          <View style={styles.stepContainer}>
-            <View style={styles.infoBox}>
-              <Text style={styles.infoText}>
-                The daily water intake needs of people of <Text style={styles.highlight}>different ages</Text> vary
-              </Text>
-            </View>
-            <Text style={styles.title}>Choose your age</Text>
-            <View style={styles.fieldRow}>
-              <TouchableOpacity onPress={() => setShowAgePicker(true)} style={styles.pickerButton}>
-                <Text style={[styles.pickerButtonText, !data.age && styles.pickerPlaceholder]}>
-                  {data.age || 'Select age'}
-                </Text>
-                <Ionicons name="chevron-down-outline" size={20} color="#6B7280" />
-              </TouchableOpacity>
-            </View>
-            <View style={styles.buttonRow}>
-              <TouchableOpacity onPress={skipStep} style={styles.skipButton}>
-                <Text style={styles.skipButtonText}>Skip</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={nextStep} style={styles.nextButton}>
-                <Text style={styles.nextButtonText}>Next</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        );
-
       case 'reminder-tone':
         return (
           <View style={styles.stepContainer}>
@@ -797,6 +756,9 @@ export default function Onboarding() {
       case 'notifications':
         return (
           <View style={styles.stepContainer}>
+            <View style={styles.iconContainer}>
+              <Ionicons name="notifications" size={64} color="#EF4444" />
+            </View>
             <Text style={styles.title}>Never miss a dose!</Text>
             <Text style={styles.description}>Let's make sure you get reminders exactly when you need them.</Text>
             <TouchableOpacity 
@@ -840,6 +802,14 @@ export default function Onboarding() {
           <Ionicons name="arrow-back" size={24} color="#1E3A8A" />
         </TouchableOpacity>
       )}
+      <View style={styles.progressWrapper}>
+        <View style={styles.progressContainer}>
+          <View style={styles.progressBarBackground}>
+            <View style={[styles.progressBarFill, { width: `${((currentStep + 1) / steps.length) * 100}%` }]} />
+          </View>
+          <Text style={styles.progressText}>{currentStep + 1} of {steps.length}</Text>
+        </View>
+      </View>
       <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
         {renderStep()}
       </ScrollView>
@@ -888,95 +858,6 @@ export default function Onboarding() {
           onChange={handleTimeChange}
         />
       )}
-
-      {/* Year Picker Modal */}
-      <Modal
-        transparent
-        animationType="slide"
-        visible={showYearPicker}
-        onRequestClose={() => setShowYearPicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowYearPicker(false)}>
-                <Text style={styles.modalCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>Select Year</Text>
-              <TouchableOpacity onPress={() => setShowYearPicker(false)}>
-                <Text style={styles.modalConfirm}>Done</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.pickerScrollView}>
-              {years.map((year) => (
-                <TouchableOpacity
-                  key={year}
-                  style={[
-                    styles.pickerItem,
-                    data.year_of_birth === year && styles.pickerItemSelected
-                  ]}
-                  onPress={() => {
-                    updateData('year_of_birth', year);
-                    setShowYearPicker(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.pickerItemText,
-                    data.year_of_birth === year && styles.pickerItemTextSelected
-                  ]}>
-                    {year}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Age Picker Modal */}
-      <Modal
-        transparent
-        animationType="slide"
-        visible={showAgePicker}
-        onRequestClose={() => setShowAgePicker(false)}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
-                <Text style={styles.modalCancel}>Cancel</Text>
-              </TouchableOpacity>
-              <Text style={styles.modalTitle}>Select Age</Text>
-              <TouchableOpacity onPress={() => setShowAgePicker(false)}>
-                <Text style={styles.modalConfirm}>Done</Text>
-              </TouchableOpacity>
-            </View>
-            <ScrollView style={styles.pickerScrollView}>
-              {ages.map((age) => (
-                <TouchableOpacity
-                  key={age}
-                  style={[
-                    styles.pickerItem,
-                    data.age === age && styles.pickerItemSelected
-                  ]}
-                  onPress={() => {
-                    updateData('age', age);
-                    updateData('year_of_birth', new Date().getFullYear() - age);
-                    setShowAgePicker(false);
-                  }}
-                >
-                  <Text style={[
-                    styles.pickerItemText,
-                    data.age === age && styles.pickerItemTextSelected
-                  ]}>
-                    {age}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-        </View>
-      </Modal>
 
       {/* Weight Picker Modal */}
       <Modal
@@ -1047,7 +928,33 @@ const styles = StyleSheet.create({
   },
   scrollContent: {
     padding: 20,
-    paddingTop: 80,
+    paddingTop: 40,
+  },
+  progressWrapper: {
+    paddingTop: 60,
+    paddingHorizontal: 20,
+  },
+  progressContainer: {
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  progressBarBackground: {
+    width: '100%',
+    height: 6,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 8,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: '#1E3A8A',
+    borderRadius: 3,
+  },
+  progressText: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
   },
   stepContainer: {
     flex: 1,
@@ -1084,6 +991,35 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E5E7EB',
   },
+  nicknameInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  nicknameIcon: {
+    marginRight: 12,
+  },
+  buttonWithIcon: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sectionHeader: {
+    fontSize: 22,
+    fontWeight: '600',
+    color: '#1F2937',
+    marginTop: 20,
+    marginBottom: 16,
+  },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: '#E5E7EB',
+    marginVertical: 24,
+  },
+  scrollContentInner: {
+    padding: 20,
+    paddingTop: 20,
+  },
   timeInputButton: {
     backgroundColor: '#fff',
     borderRadius: 12,
@@ -1100,6 +1036,9 @@ const styles = StyleSheet.create({
   },
   timeInputPlaceholder: {
     color: '#8E8E93',
+  },
+  timeInputDefault: {
+    color: '#A3A3A7',
   },
   pickerButton: {
     backgroundColor: '#fff',
@@ -1131,6 +1070,17 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 30,
+  },
+  contactPickerButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  contactPickerText: {
+    color: '#1E3A8A',
+    fontSize: 15,
+    fontWeight: '600',
   },
   skipButton: {
     padding: 16,

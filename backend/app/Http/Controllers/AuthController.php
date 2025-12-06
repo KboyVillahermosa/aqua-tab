@@ -82,6 +82,43 @@ class AuthController extends Controller
         return response()->json($request->user());
     }
 
+    public function update(Request $request)
+    {
+        $user = $request->user();
+
+        $data = $request->validate([
+            'name' => 'sometimes|required|string|max:255',
+            'email' => 'sometimes|required|email|unique:users,email,' . $user->id,
+            'phone' => 'sometimes|nullable|string|max:20',
+            'date_of_birth' => 'sometimes|nullable|date',
+            'gender' => 'sometimes|nullable|in:male,female,other',
+            'address' => 'sometimes|nullable|string|max:500',
+            'emergency_contact' => 'sometimes|nullable|string|max:255',
+            'emergency_contact_name' => 'sometimes|nullable|string|max:255',
+            'emergency_contact_phone' => 'sometimes|nullable|string|max:30',
+            'nickname' => 'sometimes|nullable|string|max:255',
+            'first_medication_time' => 'sometimes|nullable|string|max:20',
+            'end_of_day_time' => 'sometimes|nullable|string|max:20',
+            'wake_up_time' => 'sometimes|nullable|string|max:20',
+            'breakfast_time' => 'sometimes|nullable|string|max:20',
+            'lunch_time' => 'sometimes|nullable|string|max:20',
+            'dinner_time' => 'sometimes|nullable|string|max:20',
+            'climate' => 'sometimes|nullable|in:hot,temperate,cold',
+            'exercise_frequency' => 'sometimes|nullable|in:rarely,sometimes,regularly,often',
+            'weight' => 'sometimes|nullable|numeric|min:0|max:1000',
+            'weight_unit' => 'sometimes|nullable|in:kg,lbs',
+            'age' => 'sometimes|nullable|integer|min:0|max:150',
+            'reminder_tone' => 'sometimes|nullable|string|max:100',
+            'notification_permissions_accepted' => 'sometimes|nullable|boolean',
+            'battery_optimization_set' => 'sometimes|nullable|boolean',
+        ]);
+
+        $user->fill($data);
+        $user->save();
+
+        return response()->json(['user' => $user]);
+    }
+
     public function forgotPassword(Request $request)
     {
         $request->validate(['email' => 'required|email']);

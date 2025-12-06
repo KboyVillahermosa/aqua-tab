@@ -15,11 +15,13 @@ class Medication extends Model
         'dosage',
         'times',
         'reminder',
+        'active',
     ];
 
     protected $casts = [
         'times' => 'array',
         'reminder' => 'boolean',
+        'active' => 'boolean',
     ];
 
     public function history()
