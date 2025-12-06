@@ -6,9 +6,34 @@ import * as api from '../../../api';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import { Ionicons } from '@expo/vector-icons';
-import { notificationService } from '../../../services/notificationService';
+import { notificationManager } from '../../../services/notificationManager';
+import { calculateDailyWaterGoal, getDynamicQuickAddPresets, calculateHydrationPace } from '../../../hooks/useHydrationGoal';
+import { useCelebrationAnimation, useWaterGlassAnimation, usePulseAnimation, useBounceAnimation } from '../../../hooks/useHydrationAnimations';
+import * as Notifications from 'expo-notifications';
 
-// ProgressBar removed (unused) — visual progress is handled inline with animated circle
+/**
+ * HYDRATION SCREEN - EXPO GO COMPATIBLE
+ * 
+ * This component uses ONLY Expo Go-compatible notification features.
+ * NO native modules, NO push tokens, NO background tasks.
+ * 
+ * NOTIFICATION TYPES:
+ * 1. In-App Toast Messages: For hydration reminders and progress updates
+ *    - Uses react-native-toast-message
+ *    - Works in Expo Go without any build
+ * 
+ * 2. Alert Dialogs: For critical warnings and confirmations
+ *    - Uses React Native Alert API
+ *    - System-style dialogs
+ * 
+ * 3. In-App Timers: For reminders while app is open
+ *    - Uses JavaScript setInterval/setTimeout
+ *    - Checks on app resume via AppState
+ * 
+ * 4. Custom Modals: For rich notification content
+ *    - Goal completion celebrations
+ *    - Daily summaries
+ */
 
 export default function Hydration() {
   const { token } = useLocalSearchParams();
@@ -25,11 +50,101 @@ export default function Hydration() {
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [calendarData, setCalendarData] = useState<any[]>([]);
   const [showIdealGoalAlert, setShowIdealGoalAlert] = useState(false);
+  const [showInitialGoalModal, setShowInitialGoalModal] = useState(false);
+  const [userProfile, setUserProfile] = useState<any>(null);
+  const [dynamicPresets, setDynamicPresets] = useState<number[]>([150, 200, 500, 750, 1000, 1500]);
+  const [showGoalReachedModal, setShowGoalReachedModal] = useState(false);
+  const [goalReachedToday, setGoalReachedToday] = useState(false); // Track if goal was already reached today
+  const [behindAlert, setBehindAlert] = useState<string | null>(null);
+  const [showBehindAlert, setShowBehindAlert] = useState(false);
+  const [customGoalInput, setCustomGoalInput] = useState('');
+  const [initialGoalStep, setInitialGoalStep] = useState<'choice' | 'custom'>('choice');
+
   const anim = useRef(new Animated.Value(0)).current;
+  const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
+  const { pulse: pulseButton } = usePulseAnimation();
+  const bounceAnimation = useBounceAnimation();
 
   const fmt = (n:number) => {
     try { return n.toLocaleString(); } catch { return String(n); }
   };
+
+  // Hydration reminder timer ID
+  const [reminderTimerId, setReminderTimerId] = useState<string | null>(null);
+
+  // Setup hydration reminder when component mounts
+  useEffect(() => {
+    // Schedule reminder to show every 2 hours while app is open
+    const timerId = notificationManager.scheduleHydrationReminder(120, () => {
+      const current = totalToday();
+      const suggestedAmount = Math.round(goal / 8);
+      notificationManager.showHydrationReminder(suggestedAmount, current, goal);
+    });
+    
+    setReminderTimerId(timerId);
+
+    // Cleanup on unmount
+    return () => {
+      if (timerId) {
+        notificationManager.cancelReminder(timerId);
+      }
+    };
+  }, [goal]);
+
+  // FIX #3: Listen for notification taps to show confirmation modal
+  useEffect(() => {
+    const subscription = Notifications.addNotificationResponseReceivedListener((response) => {
+      console.log('Notification tapped:', response);
+      const data = response.notification.request.content.data;
+      
+      // If it's a hydration notification and water was logged, show the goal reached modal
+      if (data?.type === 'hydration' && totalToday() >= goal) {
+        setShowGoalReachedModal(true);
+      }
+    });
+
+    return () => subscription.remove();
+  }, [goal]);
+
+  // FIX #1: Reset goalReachedToday at midnight each day
+  useEffect(() => {
+    const checkMidnight = () => {
+      const now = new Date();
+      const midnight = new Date(now);
+      midnight.setHours(24, 0, 0, 0);
+      const msUntilMidnight = midnight.getTime() - now.getTime();
+      
+      const timer = setTimeout(() => {
+        console.log('Midnight reset: clearing goalReachedToday flag');
+        setGoalReachedToday(false);
+        // Recursively check again for next midnight
+        checkMidnight();
+      }, msUntilMidnight);
+      
+      return timer;
+    };
+    
+    const timer = checkMidnight();
+    return () => clearTimeout(timer);
+  }, []);
+
+  // Show initial goal modal on first load if no goal is set
+  useEffect(() => {
+    async function checkInitialGoal() {
+      try {
+        const local = await AsyncStorage.getItem('hydration');
+        // If no local data exists, show initial goal modal
+        if (!local && !loading) {
+          setShowInitialGoalModal(true);
+        }
+      } catch (err:any) {
+        console.log('Initial goal check error', err);
+      }
+    }
+    if (!loading) {
+      checkInitialGoal();
+    }
+  }, [loading]);
 
 
   // Calendar functions
@@ -67,6 +182,8 @@ export default function Hydration() {
   }
 
   function getHydrationLevel(percentage: number) {
+    if (percentage >= 130) return { level: 'over-hydrated', color: '#DC2626', icon: 'alert-circle' };
+    if (percentage >= 110) return { level: 'high', color: '#F97316', icon: 'alert' };
     if (percentage >= 100) return { level: 'excellent', color: '#10B981', icon: 'checkmark-circle' };
     if (percentage >= 75) return { level: 'good', color: '#3B82F6', icon: 'checkmark' };
     if (percentage >= 50) return { level: 'fair', color: '#F59E0B', icon: 'warning' };
@@ -98,15 +215,44 @@ export default function Hydration() {
         if (token) {
           const res = await api.get('/hydration', token as string);
           if (res) {
-            setGoal(res.goal ?? 2000);
-            setIdealGoal(res.ideal_goal ?? null);
+            setUserProfile(res.user_profile); // Store user profile for calculations
+            
+            // Calculate dynamic goal based on user profile
+            const calculatedGoal = calculateDailyWaterGoal({
+              weight: res.user_profile?.weight,
+              height: res.user_profile?.height,
+              gender: res.user_profile?.gender,
+              climate: res.user_profile?.climate,
+              exercise_frequency: res.user_profile?.exercise_frequency,
+              age: res.user_profile?.age,
+            });
+            
+            // Use calculated goal if it differs significantly from stored goal
+            const finalGoal = res.goal ?? calculatedGoal ?? 2000;
+            setGoal(finalGoal);
+            setIdealGoal(calculatedGoal);
+            
+            // Generate dynamic presets based on calculated goal
+            const presets = getDynamicQuickAddPresets(finalGoal);
+            setDynamicPresets(presets);
+            
             setEntries(res.entries ?? []);
             setMissedCount((res.missed || []).length || 0);
-            await AsyncStorage.setItem('hydration', JSON.stringify(res));
+            await AsyncStorage.setItem('hydration', JSON.stringify({ ...res, goal: finalGoal }));
             
-            // Show ideal goal popup if it's different from current goal and user hasn't set a custom goal
-            if (res.ideal_goal && res.ideal_goal !== res.goal && res.goal === 2000) {
-              // Only show if goal is still at default
+            // FIX #1: Check if goal was already reached today (prevent modal flashing on re-render)
+            const todayTotal = (res.entries ?? []).filter((e: any) => {
+              const entryDate = new Date(e.timestamp).toDateString();
+              const today = new Date().toDateString();
+              return entryDate === today;
+            }).reduce((sum: number, e: any) => sum + e.amount_ml, 0);
+            
+            if (todayTotal >= finalGoal) {
+              setGoalReachedToday(true);
+            }
+            
+            // Show ideal goal popup if it's different from current goal
+            if (calculatedGoal && calculatedGoal !== finalGoal && finalGoal === 2000) {
               setTimeout(() => {
                 setShowIdealGoalAlert(true);
               }, 500);
@@ -170,11 +316,50 @@ export default function Hydration() {
   async function addAmount(amountMl: number, source = 'quick') {
     const entry = { amount_ml: amountMl, timestamp: new Date().toISOString(), source };
     const newEntries = [...entries, entry];
+    const oldTotal = totalToday();
+    const newTotal = oldTotal + amountMl;
+    
     setEntries(newEntries);
     await persistLocal({ goal, entries: newEntries });
     
-    // Schedule next hydration reminder
-    await scheduleHydrationReminder();
+    // Trigger pulse animation
+    pulseButton();
+    
+    // FIX #1 & #2: Check if goal reached (only show modal once per day)
+    const justReachedGoal = newTotal >= goal && oldTotal < goal;
+    if (justReachedGoal && !goalReachedToday) {
+      triggerCelebration();
+      setShowGoalReachedModal(true);
+      setGoalReachedToday(true); // Mark as reached today
+      
+      // Show goal completion notification
+      notificationManager.showGoalCompletionAlert('hydration', goal);
+    }
+    
+    // FIX #2: Over-hydration warnings - ONLY show if success modal is NOT visible
+    // This prevents the black layer (double backdrop) issue
+    const currentPercentage = (newTotal / goal) * 100;
+    if (!showGoalReachedModal && goalReachedToday) {
+      // User already acknowledged goal completion, now check for over-hydration
+      if (currentPercentage > 130) {
+        notificationManager.showOverhydrationWarning(currentPercentage, newTotal);
+      } else if (currentPercentage > 110) {
+        notificationManager.showOverhydrationWarning(currentPercentage, newTotal);
+      }
+    }
+    
+    // Check if behind on hydration pace (only if not yet reached goal)
+    if (newTotal < goal) {
+      const paceCheck = calculateHydrationPace(newTotal, goal, 'morning');
+      if (!paceCheck.isOnPace && newTotal > 0 && newTotal < goal * 0.5) {
+        const behindMessage = `Stay hydrated! Drink ${paceCheck.remaining}ml more today to reach your goal.`;
+        setBehindAlert(behindMessage);
+        setShowBehindAlert(true);
+        
+        // Show behind pace notification
+        notificationManager.showBehindPaceAlert(paceCheck.remaining);
+      }
+    }
     
     // optimistic server sync
     if (token) {
@@ -186,21 +371,7 @@ export default function Hydration() {
     }
   }
 
-  async function scheduleHydrationReminder() {
-    if (!token) return;
 
-    try {
-      notificationService.setToken(token as string);
-      
-      // Schedule next reminder based on interval (default 2 hours = 120 minutes)
-      const intervalMinutes = 120; // Could be made configurable from user settings
-      const amountMl = Math.round(goal / 8); // Suggest 1/8th of daily goal per reminder
-      
-      await notificationService.scheduleHydrationReminder(intervalMinutes, amountMl);
-    } catch (error) {
-      console.error('Error scheduling hydration reminder:', error);
-    }
-  }
 
   async function submitCustom() {
     const val = parseInt(amountInput || '0', 10);
@@ -252,6 +423,11 @@ export default function Hydration() {
   async function updateGoal(newGoal: number) {
     setGoal(newGoal);
     await persistLocal({ goal: newGoal, entries });
+    
+    // Update dynamic presets based on new goal
+    const presets = getDynamicQuickAddPresets(newGoal);
+    setDynamicPresets(presets);
+    
     if (token) {
       try { 
         await api.post('/hydration/goal', { goal_ml: newGoal }, token as string);
@@ -261,6 +437,53 @@ export default function Hydration() {
         Alert.alert('Error', 'Failed to update goal on server');
       }
     }
+  }
+
+  async function deleteEntry(index: number) {
+    Alert.alert(
+      'Delete Entry',
+      'Are you sure you want to delete this hydration entry?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const newEntries = [...entries];
+            const deletedEntry = newEntries[index];
+            
+            if (!deletedEntry) {
+              console.log('Entry not found at index:', index);
+              return;
+            }
+            
+            newEntries.splice(index, 1);
+            
+            setEntries(newEntries);
+            await persistLocal({ goal, entries: newEntries });
+            
+            // Sync with server
+            if (token && deletedEntry) {
+              try {
+                await api.post('/hydration/delete', { 
+                  timestamp: deletedEntry.timestamp 
+                }, token as string);
+              } catch (err:any) {
+                console.log('Delete sync error', err);
+              }
+            }
+            
+            // Reload calendar data to reflect deletion
+            if (token) {
+              try {
+                const h = await api.get(`/hydration/history?range=${historyRange}`, token as string);
+                setHistoryData(h || []);
+              } catch (e) { console.log('history reload err', e); }
+            }
+          }
+        }
+      ]
+    );
   }
 
   function totalToday() {
@@ -273,11 +496,41 @@ export default function Hydration() {
   }
 
   function percent() {
-    return (totalToday() / (goal || 1)) * 100;
+    return (totalToday() / (goal || 1)) * 100; // Allow exceeding 100% for over-hydration tracking
+  }
+
+  // Handle setting recommended goal from initial modal
+  async function handleSetRecommendedGoal() {
+    if (idealGoal) {
+      await updateGoal(idealGoal);
+      setShowInitialGoalModal(false);
+      setInitialGoalStep('choice');
+    }
+  }
+
+  // Handle setting custom goal from initial modal
+  async function handleSetCustomGoal() {
+    const val = parseInt(customGoalInput || '0', 10);
+    if (!val || val <= 0) {
+      Alert.alert('Invalid Input', 'Please enter a positive amount');
+      return;
+    }
+    if (val < 1000 || val > 5000) {
+      Alert.alert('Invalid Range', 'Goal must be between 1000-5000ml');
+      return;
+    }
+    await updateGoal(val);
+    setShowInitialGoalModal(false);
+    setInitialGoalStep('choice');
+    setCustomGoalInput('');
   }
 
   function getMotivationalMessage() {
     const pct = percent();
+    if (pct >= 200) return "🚨 Critical! You've doubled your goal - stop immediately!";
+    if (pct >= 150) return "⚠️ Extreme over-hydration! Please slow down!";
+    if (pct >= 130) return "⚠️ Slow down! You're well over your goal!";
+    if (pct >= 110) return "💧 You're over your goal - stay mindful!";
     if (pct >= 100) return "🎉 Excellent! You've reached your daily goal!";
     if (pct >= 75) return "💪 Almost there! Keep going!";
     if (pct >= 50) return "👍 Great progress! Halfway there!";
@@ -306,7 +559,9 @@ export default function Hydration() {
       if (token) {
         await api.post('/hydration/missed', { timestamp: ts }, token as string);
       }
-      Alert.alert('Logged', 'Missed reminder recorded');
+      
+      // Show missed log notification
+      notificationManager.showMissedLogReminder('hydration');
     } catch (e) { console.log('missed log error', e); }
   }
 
@@ -357,38 +612,38 @@ export default function Hydration() {
         <View style={styles.cardAlt}>
           <Text style={styles.quickAddTitle}>Quick Add</Text>
           <View style={styles.quickRowAlt}>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#60A5FA'}]} onPress={() => addAmount(200,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#60A5FA'}]} onPress={() => addAmount(dynamicPresets[0],'quick')} activeOpacity={0.85}>
               <Ionicons name="water" size={18} color="white" />
-              <Text style={styles.quickCardValue}>200</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[0]}</Text>
               <Text style={styles.quickCardUnit}>ml</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#3B82F6'}]} onPress={() => addAmount(500,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#3B82F6'}]} onPress={() => addAmount(dynamicPresets[1],'quick')} activeOpacity={0.85}>
               <Ionicons name="water" size={18} color="white" />
-              <Text style={styles.quickCardValue}>500</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[1]}</Text>
               <Text style={styles.quickCardUnit}>ml</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#1D4ED8'}]} onPress={() => addAmount(1000,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#1D4ED8'}]} onPress={() => addAmount(dynamicPresets[2],'quick')} activeOpacity={0.85}>
               <Ionicons name="flask" size={18} color="white" />
-              <Text style={styles.quickCardValue}>1</Text>
-              <Text style={styles.quickCardUnit}>L</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[2] >= 1000 ? (dynamicPresets[2] / 1000).toFixed(1) : dynamicPresets[2]}</Text>
+              <Text style={styles.quickCardUnit}>{dynamicPresets[2] >= 1000 ? 'L' : 'ml'}</Text>
             </TouchableOpacity>
           </View>
           
           <View style={styles.quickRowAlt}>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#10B981'}]} onPress={() => addAmount(150,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#10B981'}]} onPress={() => addAmount(dynamicPresets[3],'quick')} activeOpacity={0.85}>
               <Ionicons name="cafe" size={18} color="white" />
-              <Text style={styles.quickCardValue}>150</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[3]}</Text>
               <Text style={styles.quickCardUnit}>ml</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#F59E0B'}]} onPress={() => addAmount(750,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#F59E0B'}]} onPress={() => addAmount(dynamicPresets[4],'quick')} activeOpacity={0.85}>
               <Ionicons name="wine" size={18} color="white" />
-              <Text style={styles.quickCardValue}>750</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[4]}</Text>
               <Text style={styles.quickCardUnit}>ml</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#EF4444'}]} onPress={() => addAmount(1500,'quick')} activeOpacity={0.85}>
+            <TouchableOpacity style={[styles.quickCard, {backgroundColor:'#EF4444'}]} onPress={() => addAmount(dynamicPresets[5],'quick')} activeOpacity={0.85}>
               <Ionicons name="beaker" size={18} color="white" />
-              <Text style={styles.quickCardValue}>1.5</Text>
-              <Text style={styles.quickCardUnit}>L</Text>
+              <Text style={styles.quickCardValue}>{dynamicPresets[5] >= 1000 ? (dynamicPresets[5] / 1000).toFixed(1) : dynamicPresets[5]}</Text>
+              <Text style={styles.quickCardUnit}>{dynamicPresets[5] >= 1000 ? 'L' : 'ml'}</Text>
             </TouchableOpacity>
           </View>
 
@@ -470,39 +725,93 @@ export default function Hydration() {
                 {selectedDate.toLocaleDateString('en', { weekday: 'long', month: 'long', day: 'numeric' })}
               </Text>
               {(() => {
-                const selectedDayData = calendarData.find(d => d.date === selectedDate.toISOString().split('T')[0]);
+                const selectedDateStr = selectedDate.toISOString().split('T')[0];
+                const selectedDayData = calendarData.find(d => d.date === selectedDateStr);
                 const amount = selectedDayData?.amount_ml || 0;
                 const percentage = (amount / goal) * 100;
                 const level = getHydrationLevel(percentage);
                 
+                // Get actual entries for selected date
+                const dateEntries = entries.filter(e => 
+                  e.timestamp && e.timestamp.slice(0,10) === selectedDateStr
+                );
+                
                 return (
-                  <View style={styles.dayStats}>
-                    <View style={styles.statItem}>
-                      <Text style={styles.statValue}>{amount}ml</Text>
-                      <Text style={styles.statLabel}>Consumed</Text>
+                  <>
+                    <View style={styles.dayStats}>
+                      <View style={styles.statItem}>
+                        <Text style={styles.statValue}>{amount}ml</Text>
+                        <Text style={styles.statLabel}>Consumed</Text>
+                      </View>
+                      <View style={styles.statItem}>
+                        <Text style={styles.statValue}>{Math.round(percentage)}%</Text>
+                        <Text style={styles.statLabel}>of Goal</Text>
+                      </View>
+                      <View style={styles.statItem}>
+                        <Ionicons name={level.icon as any} size={20} color={level.color} />
+                        <Text style={[styles.statLabel, { color: level.color }]}>{level.level}</Text>
+                      </View>
                     </View>
-                    <View style={styles.statItem}>
-                      <Text style={styles.statValue}>{Math.round(percentage)}%</Text>
-                      <Text style={styles.statLabel}>of Goal</Text>
-                    </View>
-                    <View style={styles.statItem}>
-                      <Ionicons name={level.icon as any} size={20} color={level.color} />
-                      <Text style={[styles.statLabel, { color: level.color }]}>{level.level}</Text>
-                    </View>
-                  </View>
+                    
+                    {/* Show actual logs for selected date */}
+                    {dateEntries.length > 0 && (
+                      <View style={styles.dateLogsContainer}>
+                        <Text style={styles.dateLogsTitle}>Hydration Logs:</Text>
+                        {dateEntries.map((entry, idx) => (
+                          <View key={idx} style={styles.dateLogRow}>
+                            <View style={styles.dateLogInfo}>
+                              <Text style={styles.dateLogTime}>
+                                {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              </Text>
+                              <Text style={styles.dateLogAmount}>{fmt(entry.amount_ml)} ml</Text>
+                            </View>
+                            <Text style={styles.dateLogSource}>({entry.source})</Text>
+                          </View>
+                        ))}
+                      </View>
+                    )}
+                    
+                    {dateEntries.length === 0 && amount === 0 && (
+                      <Text style={styles.noLogsText}>No hydration logged for this date</Text>
+                    )}
+                  </>
                 );
               })()}
             </View>
           )}
 
-          {/* Recent entries with alternating rows */}
+          {/* Recent entries with alternating rows and delete buttons */}
           <View style={{marginTop:12}}>
-            {recentList().map((e:any, idx:number) => (
-              <View key={idx} style={[styles.historyRowAlt, idx % 2 === 0 ? styles.rowAltEven : styles.rowAltOdd]}>
-                <Text style={styles.historyText}>💧 {new Date(e.timestamp).toLocaleTimeString()} • {e.source}</Text>
-                <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
-              </View>
-            ))}
+            <Text style={styles.recentEntriesTitle}>Recent Entries</Text>
+            {recentList().map((e:any, idx:number) => {
+              // Find the actual index in the original entries array by matching timestamp
+              const actualIndex = entries.findIndex(entry => 
+                entry.timestamp === e.timestamp && entry.amount_ml === e.amount_ml
+              );
+              
+              return (
+                <View key={idx} style={[styles.historyRowAlt, idx % 2 === 0 ? styles.rowAltEven : styles.rowAltOdd]}>
+                  <View style={styles.historyRowContent}>
+                    <View style={styles.historyRowLeft}>
+                      <Text style={styles.historyText}>💧 {new Date(e.timestamp).toLocaleTimeString()} • {e.source}</Text>
+                      <Text style={styles.historyAmt}>{fmt(e.amount_ml || 0)} ml</Text>
+                    </View>
+                    <TouchableOpacity 
+                      onPress={() => {
+                        if (actualIndex !== -1) {
+                          deleteEntry(actualIndex);
+                        } else {
+                          console.log('Entry not found in array');
+                        }
+                      }}
+                      style={styles.deleteButton}
+                    >
+                      <Ionicons name="trash-outline" size={20} color="#EF4444" />
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              );
+            })}
           </View>
         </View>
 
@@ -546,6 +855,167 @@ export default function Hydration() {
                 <Text style={styles.modalButtonPrimaryText}>Use Recommended</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Goal Reached Celebration Modal */}
+      <Modal
+        visible={showGoalReachedModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowGoalReachedModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <Animated.View style={[styles.celebrationContainer, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}>
+            <View style={styles.modalContent}>
+              <Ionicons name="checkmark-circle" size={60} color="#10B981" style={{ marginBottom: 16 }} />
+              <Text style={styles.celebrationTitle}>🎉 Goal Achieved!</Text>
+              <Text style={styles.celebrationMessage}>
+                Amazing! You've reached your daily hydration goal of {goal}ml. Keep up the great work!
+              </Text>
+              <View style={styles.celebrationStats}>
+                <View style={styles.statBox}>
+                  <Text style={styles.celebrationStatValue}>{fmt(totalToday())}</Text>
+                  <Text style={styles.celebrationStatLabel}>Total Intake</Text>
+                </View>
+                <View style={styles.statBox}>
+                  <Text style={styles.celebrationStatValue}>100%</Text>
+                  <Text style={styles.celebrationStatLabel}>Goal Completed</Text>
+                </View>
+              </View>
+              <TouchableOpacity 
+                style={styles.celebrationButton}
+                onPress={() => setShowGoalReachedModal(false)}
+              >
+                <Text style={styles.celebrationButtonText}>Continue</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Behind on Pace Alert Modal */}
+      <Modal
+        visible={showBehindAlert}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowBehindAlert(false)}
+      >
+        <View style={styles.alertOverlay}>
+          <Animated.View style={[styles.alertContent, bounceAnimation]}>
+            <View style={styles.alertIcon}>
+              <Ionicons name="warning" size={32} color="#EF4444" />
+            </View>
+            <Text style={styles.alertTitle}>Stay on Track!</Text>
+            <Text style={styles.alertMessage}>{behindAlert}</Text>
+            <TouchableOpacity 
+              style={styles.alertButton}
+              onPress={() => setShowBehindAlert(false)}
+            >
+              <Text style={styles.alertButtonText}>Got It</Text>
+            </TouchableOpacity>
+          </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Initial Hydration Goal Modal - Appears on First Load */}
+      <Modal
+        visible={showInitialGoalModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {}}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            {initialGoalStep === 'choice' ? (
+              <>
+                <View style={styles.initialModalIcon}>
+                  <Ionicons name="water" size={48} color="#3B82F6" />
+                </View>
+                <Text style={styles.modalTitle}>Set Your Hydration Goal</Text>
+                <Text style={styles.modalMessage}>
+                  Let's get started by setting your daily water intake goal.
+                </Text>
+                
+                {idealGoal && (
+                  <View style={styles.recommendedGoalBox}>
+                    <Text style={styles.recommendedLabel}>📊 Recommended for You:</Text>
+                    <Text style={styles.recommendedValue}>{idealGoal} ml</Text>
+                    <Text style={styles.recommendedExplain}>
+                      Calculated based on your body profile and climate
+                    </Text>
+                  </View>
+                )}
+                
+                <View style={styles.modalButtons}>
+                  {idealGoal ? (
+                    <>
+                      <TouchableOpacity 
+                        style={styles.modalButtonPrimary}
+                        onPress={handleSetRecommendedGoal}
+                      >
+                        <Text style={styles.modalButtonPrimaryText}>✓ Use Recommended</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity 
+                        style={styles.modalButtonSecondary}
+                        onPress={() => setInitialGoalStep('custom')}
+                      >
+                        <Text style={styles.modalButtonSecondaryText}>Custom Amount</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : (
+                    <TouchableOpacity 
+                      style={styles.modalButtonPrimary}
+                      onPress={() => setInitialGoalStep('custom')}
+                    >
+                      <Text style={styles.modalButtonPrimaryText}>Set Custom Goal</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </>
+            ) : (
+              <>
+                <View style={styles.initialModalIcon}>
+                  <Ionicons name="create" size={48} color="#F59E0B" />
+                </View>
+                <Text style={styles.modalTitle}>Custom Hydration Goal</Text>
+                <Text style={styles.modalMessage}>
+                  Enter your daily water intake goal in milliliters (1000-5000ml)
+                </Text>
+                
+                <TextInput
+                  placeholder="Enter amount in ml"
+                  keyboardType="numeric"
+                  value={customGoalInput}
+                  onChangeText={setCustomGoalInput}
+                  style={styles.customGoalInput}
+                  placeholderTextColor="#9CA3AF"
+                />
+                
+                <Text style={styles.inputHint}>
+                  💡 Recommended: 2000-3000ml for most adults
+                </Text>
+                
+                <View style={styles.modalButtons}>
+                  <TouchableOpacity 
+                    style={styles.modalButtonSecondary}
+                    onPress={() => {
+                      setInitialGoalStep('choice');
+                      setCustomGoalInput('');
+                    }}
+                  >
+                    <Text style={styles.modalButtonSecondaryText}>Back</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.modalButtonPrimary}
+                    onPress={handleSetCustomGoal}
+                  >
+                    <Text style={styles.modalButtonPrimaryText}>Set Goal</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
           </View>
         </View>
       </Modal>
@@ -640,22 +1110,38 @@ const styles = StyleSheet.create({
   dayHeaders: { flexDirection:'row', marginBottom:8 },
   dayHeader: { flex:1, textAlign:'center', fontSize:12, fontWeight:'600', color:'#6B7280', paddingVertical:8 },
   calendarDays: { flexDirection:'row', flexWrap:'wrap' },
-  calendarDay: { width:'14.28%', aspectRatio:1, justifyContent:'center', alignItems:'center', borderRadius:8, marginBottom:4, position:'relative' },
+  calendarDay: { width:'14.28%', aspectRatio:1, justifyContent:'flex-start', alignItems:'center', borderRadius:8, marginBottom:4, position:'relative', paddingTop: 4 },
   calendarDayOtherMonth: { opacity:0.3 },
   calendarDayToday: { backgroundColor:'#EBF8FF', borderWidth:2, borderColor:'#3B82F6' },
   calendarDaySelected: { backgroundColor:'#1D4ED8' },
-  calendarDayText: { fontSize:14, fontWeight:'500', color:'#374151' },
+  calendarDayText: { fontSize:14, fontWeight:'500', color:'#374151', marginBottom: 2 },
   calendarDayTextOtherMonth: { color:'#9CA3AF' },
   calendarDayTextToday: { color:'#1D4ED8', fontWeight:'700' },
   calendarDayTextSelected: { color:'white', fontWeight:'700' },
-  hydrationIndicator: { position:'absolute', top:2, right:2, padding: 2, borderRadius: 8, borderWidth: 1.5 },
-  dayAmount: { fontSize:8, color:'#6B7280', fontWeight:'500', marginTop:2 },
+  hydrationIndicator: { position:'absolute', bottom:2, alignSelf:'center', padding: 1, borderRadius: 6, borderWidth: 1.5, backgroundColor: 'transparent' },
+  dayAmount: { fontSize:8, color:'#6B7280', fontWeight:'500', position:'absolute', bottom:14, alignSelf:'center' },
   selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:16, marginTop:8 },
   selectedDayTitle: { fontSize:16, fontWeight:'600', color:'#1F2937', marginBottom:12 },
-  dayStats: { flexDirection:'row', justifyContent:'space-around' },
+  dayStats: { flexDirection:'row', justifyContent:'space-around', marginBottom: 16 },
   statItem: { alignItems:'center' },
   statValue: { fontSize:18, fontWeight:'700', color:'#1F2937', marginBottom:4 },
   statLabel: { fontSize:12, color:'#6B7280', fontWeight:'500' },
+  
+  // Date-specific logs styles
+  dateLogsContainer: { marginTop: 12, backgroundColor: '#F9FAFB', borderRadius: 10, padding: 14, borderWidth: 1, borderColor: '#E5E7EB' },
+  dateLogsTitle: { fontSize: 13, fontWeight: '700', color: '#374151', marginBottom: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  dateLogRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#E5E7EB', marginBottom: 4 },
+  dateLogInfo: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingRight: 8 },
+  dateLogTime: { fontSize: 12, color: '#6B7280', fontWeight: '600', minWidth: 55 },
+  dateLogAmount: { fontSize: 14, color: '#0F172A', fontWeight: '700' },
+  dateLogSource: { fontSize: 10, color: '#9CA3AF', fontStyle: 'italic', paddingLeft: 4 },
+  noLogsText: { fontSize: 13, color: '#9CA3AF', textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
+  
+  // Recent entries with delete functionality
+  recentEntriesTitle: { fontSize: 16, fontWeight: '700', color: '#0F172A', marginBottom: 8 },
+  historyRowContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', width: '100%' },
+  historyRowLeft: { flex: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingRight: 8 },
+  deleteButton: { padding: 8, borderRadius: 8, backgroundColor: '#FEE2E2' },
 
   chartRowAlt: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', marginTop: 12, height: 160, paddingHorizontal: 4 },
   chartBarContainer: { alignItems: 'center', flex: 1, minWidth: 32 },
@@ -695,4 +1181,32 @@ const styles = StyleSheet.create({
   modalButtonSecondaryText: { color: '#6B7280', fontWeight: '600', textAlign: 'center', fontSize: 14 },
   modalButtonPrimary: { flex: 1, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 10, backgroundColor: '#1E3A8A', shadowColor: '#1E3A8A', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 4, elevation: 4 },
   modalButtonPrimaryText: { color: '#FFFFFF', fontWeight: '700', textAlign: 'center', fontSize: 14 },
+  // Celebration styles
+  celebrationContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  celebrationTitle: { fontSize: 28, fontWeight: '900', color: '#10B981', marginBottom: 12, textAlign: 'center' },
+  celebrationMessage: { fontSize: 16, color: '#6B7280', marginBottom: 20, textAlign: 'center', lineHeight: 24 },
+  celebrationStats: { flexDirection: 'row', marginBottom: 24, gap: 16 },
+  statBox: { flex: 1, backgroundColor: '#F0FDF4', paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, alignItems: 'center' },
+  celebrationStatValue: { fontSize: 20, fontWeight: '900', color: '#10B981', marginBottom: 4 },
+  celebrationStatLabel: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
+  celebrationButton: { paddingVertical: 14, paddingHorizontal: 32, backgroundColor: '#10B981', borderRadius: 10, marginTop: 12 },
+  celebrationButtonText: { color: 'white', fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  // Alert styles
+  alertOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.3)', justifyContent: 'flex-end', zIndex: 999 },
+  alertContent: { backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 32 },
+  alertIcon: { alignItems: 'center', marginBottom: 16 },
+  alertTitle: { fontSize: 20, fontWeight: '700', color: '#1F2937', marginBottom: 8, textAlign: 'center' },
+  alertMessage: { fontSize: 15, color: '#6B7280', marginBottom: 20, textAlign: 'center', lineHeight: 22 },
+  alertButton: { paddingVertical: 12, paddingHorizontal: 20, backgroundColor: '#1E3A8A', borderRadius: 10 },
+  alertButtonText: { color: 'white', fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  
+  // Initial Goal Modal Styles
+  initialModalIcon: { alignItems: 'center', marginBottom: 16 },
+  recommendedGoalBox: { backgroundColor: '#EBF8FF', borderRadius: 12, padding: 16, marginBottom: 20, borderLeftWidth: 4, borderLeftColor: '#3B82F6' },
+  recommendedLabel: { fontSize: 12, color: '#1E40AF', fontWeight: '600', marginBottom: 4 },
+  recommendedValue: { fontSize: 28, fontWeight: '900', color: '#1E3A8A', marginBottom: 4 },
+  recommendedExplain: { fontSize: 12, color: '#3B82F6', lineHeight: 16 },
+  customGoalInput: { borderWidth: 2, borderColor: '#E5E7EB', borderRadius: 10, paddingHorizontal: 16, paddingVertical: 12, fontSize: 16, color: '#0F172A', marginBottom: 8 },
+  inputHint: { fontSize: 12, color: '#6B7280', textAlign: 'center', marginBottom: 16, fontStyle: 'italic' },
 });
+

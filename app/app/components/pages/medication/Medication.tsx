@@ -6,7 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 import * as api from '../../../api';
 import { useLocalSearchParams } from 'expo-router';
-import { notificationService } from '../../../services/notificationService';
+import { notificationManager } from '../../../services/notificationManager';
 import PremiumLockModal from '../../PremiumLockModal';
 
 type MedicationItem = {
@@ -383,23 +383,34 @@ export default function Medication() {
   }
 
   async function scheduleMedicationReminders(medication: MedicationItem) {
-    if (!token || !medication.reminder) {
-      // If reminder is disabled, cancel existing notifications
+    if (!medication.reminder) {
+      // If reminder is disabled, cancel existing reminders
       if (medication.id) {
-        await notificationService.cancelMedicationNotifications(medication.id);
+        notificationManager.cancelAllReminders('medication');
       }
       return;
     }
 
     try {
-      // Schedule notifications for each time
-      await notificationService.scheduleMedicationNotifications(
-        medication.id,
-        medication.name,
-        medication.dosage,
-        medication.times,
-        medication.id // Use medication ID as backend notification ID for now
-      );
+      // Schedule in-app reminders for each time
+      medication.times.forEach((timeStr) => {
+        const targetTime = new Date(timeStr);
+        const now = new Date();
+        
+        // If time is in the past today, schedule for tomorrow
+        if (targetTime < now) {
+          targetTime.setDate(targetTime.getDate() + 1);
+        }
+        
+        // Schedule reminder
+        notificationManager.scheduleMedicationReminder(targetTime, () => {
+          notificationManager.showMedicationReminder(
+            medication.name,
+            medication.dosage,
+            targetTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          );
+        });
+      });
     } catch (error) {
       console.error('Error scheduling medication reminders:', error);
     }
@@ -492,8 +503,8 @@ export default function Medication() {
     Alert.alert('Delete', 'Delete this medication?', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: async () => {
-        // Cancel notifications for this medication first
-        await notificationService.cancelMedicationNotifications(id);
+        // Cancel reminders for this medication first
+        notificationManager.cancelAllReminders('medication');
         
         // optimistic remove locally and persist immediately to storage
         const previous = meds;
@@ -659,10 +670,26 @@ export default function Medication() {
     const entry: HistoryEntry = { id: uid(), medId, time: snoozedTime, status: 'snoozed' };
     setHistory((h) => [entry, ...h]);
     
-    // Reschedule notification (temporarily disabled)
-    console.log('Notification rescheduling temporarily disabled');
+    // Schedule snooze reminder
+    const med = meds.find(m => m.id === medId);
+    if (med) {
+      const snoozeTime = new Date(Date.now() + mins * 60 * 1000);
+      notificationManager.scheduleMedicationReminder(snoozeTime, () => {
+        notificationManager.showMedicationReminder(
+          med.name,
+          med.dosage,
+          snoozeTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        );
+      });
+    }
     
-    Alert.alert('Snoozed', `Reminder snoozed by ${mins} minutes`);
+    notificationManager.showCustomNotification(
+      'Snoozed',
+      `Reminder snoozed by ${mins} minutes`,
+      'toast',
+      'low'
+    );
+    
     if (token) {
       await api.post(`/medications/${medId}/history`, { status: 'snoozed', time: entry.time }, token as string).catch(()=>{});
     }

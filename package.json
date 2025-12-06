@@ -26,6 +26,7 @@
     "expo-router": "6.0.15",
     "expo-splash-screen": "31.0.11",
     "expo-web-browser": "~15.0.8",
+    "react-native-toast-message": "^2.3.3",
     "typescript": "~5.9.2"
   }
 }

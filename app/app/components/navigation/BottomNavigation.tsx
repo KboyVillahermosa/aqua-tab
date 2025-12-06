@@ -49,7 +49,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     { 
       key: 'notification', 
       icon: 'notifications', 
-      label: 'Reminders',
+      label: 'Activity',
       route: '/components/pages/notification/Notification'
     },
     { 

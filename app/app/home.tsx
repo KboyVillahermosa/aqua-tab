@@ -43,6 +43,9 @@ export default function Home() {
   const [medicineSearch, setMedicineSearch] = useState('');
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
+  const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
+  const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
 
   // Debounce medicine search
   useEffect(() => {
@@ -66,6 +69,26 @@ export default function Home() {
     const debounceTimer = setTimeout(searchMedicines, 300);
     return () => clearTimeout(debounceTimer);
   }, [medicineSearch]);
+
+  // Detect hydration goal completion and over-hydration
+  useEffect(() => {
+    const currentPercentage = quickStatus.hydrationPercentage;
+    
+    // Show goal completion modal when crossing 100% threshold
+    if (currentPercentage >= 100 && previousHydrationPercentage < 100) {
+      setShowGoalCompletionModal(true);
+    }
+    
+    // Show over-hydration modal when exceeding 110% (after goal was already completed)
+    if (currentPercentage > 110 && previousHydrationPercentage >= 100 && previousHydrationPercentage <= 110) {
+      setShowOverHydrationModal(true);
+    }
+    
+    // Update previous percentage
+    if (currentPercentage !== previousHydrationPercentage) {
+      setPreviousHydrationPercentage(currentPercentage);
+    }
+  }, [quickStatus.hydrationPercentage, previousHydrationPercentage]);
 
   useEffect(() => {
     // Safety timeout - always set loading to false after 5 seconds max (very aggressive)
@@ -214,6 +237,40 @@ export default function Home() {
       setSnoozeSuggestions([]);
     }
   }, [subscription, token]);
+
+  // Real-time hydration polling - refresh every 10 seconds
+  useEffect(() => {
+    if (!token || loading) return;
+
+    const fetchHydrationStatus = async () => {
+      try {
+        const results = await Promise.allSettled([
+          api.get('/hydration', token as string, 3000).catch(() => null),
+          api.get('/medications/upcoming', token as string, 3000).catch(() => null),
+        ]);
+        
+        const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
+        const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
+        
+        const hydrationPercentage = hydrationData ? Math.round(hydrationData?.percentage || 0) : 0;
+        const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
+        
+        setQuickStatus({
+          medicationsLeft,
+          hydrationPercentage
+        });
+        
+        console.log('Real-time update: Hydration', hydrationPercentage + '%', 'Medications left:', medicationsLeft);
+      } catch (error) {
+        console.log('Error refreshing quick status:', error);
+      }
+    };
+
+    // Poll every 10 seconds for real-time updates
+    const pollInterval = setInterval(fetchHydrationStatus, 10000);
+
+    return () => clearInterval(pollInterval);
+  }, [token, loading]);
 
 
   if (loading) {
@@ -663,6 +720,89 @@ export default function Home() {
                 <Text style={styles.premiumPopupCloseText}>Maybe Later</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Goal Completion Modal */}
+      <Modal
+        visible={showGoalCompletionModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowGoalCompletionModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.goalModalContent}>
+            <View style={styles.goalModalHeader}>
+              <Ionicons name="checkmark-circle" size={64} color="#10B981" />
+              <Text style={styles.goalModalTitle}>🎉 Goal Achieved!</Text>
+              <Text style={styles.goalModalSubtitle}>Amazing progress on your hydration goal!</Text>
+            </View>
+            
+            <View style={styles.goalModalStats}>
+              <View style={styles.goalStatBox}>
+                <Text style={styles.goalStatValue}>{quickStatus.hydrationPercentage}%</Text>
+                <Text style={styles.goalStatLabel}>Hydration Goal</Text>
+              </View>
+            </View>
+
+            <Text style={styles.goalModalMessage}>
+              You've reached 100% of your daily hydration goal! Keep up the excellent work and stay healthy! 💧
+            </Text>
+
+            <TouchableOpacity 
+              style={styles.goalModalButton}
+              onPress={() => setShowGoalCompletionModal(false)}
+            >
+              <Text style={styles.goalModalButtonText}>Continue</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Over-Hydration Warning Modal */}
+      <Modal
+        visible={showOverHydrationModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowOverHydrationModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.overHydrationModalContent}>
+            <View style={styles.overHydrationModalHeader}>
+              <Ionicons name="warning" size={64} color="#F59E0B" />
+              <Text style={styles.overHydrationModalTitle}>⚠️ Over-Hydration Alert</Text>
+              <Text style={styles.overHydrationModalSubtitle}>You've exceeded your goal</Text>
+            </View>
+            
+            <View style={styles.goalModalStats}>
+              <View style={styles.overHydrationStatBox}>
+                <Text style={styles.overHydrationStatValue}>{quickStatus.hydrationPercentage}%</Text>
+                <Text style={styles.goalStatLabel}>Current Level</Text>
+              </View>
+            </View>
+
+            <Text style={styles.overHydrationModalMessage}>
+              You're at {quickStatus.hydrationPercentage}% of your daily goal. While staying hydrated is important, drinking too much water can dilute essential nutrients. Consider slowing down.
+            </Text>
+
+            <View style={styles.overHydrationTips}>
+              <View style={styles.tipItem}>
+                <Ionicons name="information-circle" size={20} color="#3B82F6" />
+                <Text style={styles.tipText}>Listen to your body's signals</Text>
+              </View>
+              <View style={styles.tipItem}>
+                <Ionicons name="information-circle" size={20} color="#3B82F6" />
+                <Text style={styles.tipText}>Space out water intake evenly</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity 
+              style={styles.overHydrationModalButton}
+              onPress={() => setShowOverHydrationModal(false)}
+            >
+              <Text style={styles.goalModalButtonText}>Got It</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1289,5 +1429,175 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#E5E7EB',
     marginVertical: 4,
+  },
+  // Modal Overlay
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  // Goal Completion Modal Styles
+  goalModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 28,
+    width: '100%',
+    maxWidth: 380,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  goalModalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  goalModalTitle: {
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  goalModalSubtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  goalModalStats: {
+    width: '100%',
+    marginBottom: 20,
+  },
+  goalStatBox: {
+    backgroundColor: '#ECFDF5',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#10B981',
+  },
+  goalStatValue: {
+    fontSize: 48,
+    fontWeight: '700',
+    color: '#10B981',
+    marginBottom: 4,
+  },
+  goalStatLabel: {
+    fontSize: 14,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  goalModalMessage: {
+    fontSize: 15,
+    color: '#4B5563',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 24,
+  },
+  goalModalButton: {
+    backgroundColor: '#10B981',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    width: '100%',
+    alignItems: 'center',
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  goalModalButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  // Over-Hydration Modal Styles
+  overHydrationModalContent: {
+    backgroundColor: 'white',
+    borderRadius: 24,
+    padding: 28,
+    width: '100%',
+    maxWidth: 380,
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    elevation: 10,
+  },
+  overHydrationModalHeader: {
+    alignItems: 'center',
+    marginBottom: 24,
+  },
+  overHydrationModalTitle: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 16,
+    textAlign: 'center',
+  },
+  overHydrationModalSubtitle: {
+    fontSize: 15,
+    color: '#6B7280',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  overHydrationStatBox: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 16,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#F59E0B',
+  },
+  overHydrationStatValue: {
+    fontSize: 48,
+    fontWeight: '700',
+    color: '#F59E0B',
+    marginBottom: 4,
+  },
+  overHydrationModalMessage: {
+    fontSize: 15,
+    color: '#4B5563',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  overHydrationTips: {
+    width: '100%',
+    backgroundColor: '#F0F9FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 24,
+  },
+  tipItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  tipText: {
+    fontSize: 14,
+    color: '#1F2937',
+    marginLeft: 10,
+    flex: 1,
+  },
+  overHydrationModalButton: {
+    backgroundColor: '#F59E0B',
+    borderRadius: 12,
+    paddingVertical: 14,
+    paddingHorizontal: 32,
+    width: '100%',
+    alignItems: 'center',
+    shadowColor: '#F59E0B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
   },
 });
