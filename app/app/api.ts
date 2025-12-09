@@ -1,7 +1,7 @@
-const BASE_URL = 'https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api'; // use emulator host for localhost; adjust as needed
+const BASE_URL = 'https://aqua-tab-production.up.railway.app/api'; 
 
 async function parseResponse(res: Response) {
-  // Try JSON first, else return text
+
   try {
     const json = await res.json();
     return json;
