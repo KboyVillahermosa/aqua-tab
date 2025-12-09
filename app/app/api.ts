@@ -1,4 +1,4 @@
-const BASE_URL = 'https://aqua-tab-production.up.railway.app/api'; 
+const BASE_URL = 'https://pseudohexagonal-minna-unobsolete.ngrok-free.dev/api'; 
 
 async function parseResponse(res: Response) {
 

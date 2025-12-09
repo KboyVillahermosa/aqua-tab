@@ -11,6 +11,49 @@ import { calculateDailyWaterGoal, getDynamicQuickAddPresets, calculateHydrationP
 import { useCelebrationAnimation, useWaterGlassAnimation, usePulseAnimation, useBounceAnimation } from '../../../hooks/useHydrationAnimations';
 import * as Notifications from 'expo-notifications';
 
+interface UserDetails {
+  weight?: number;
+  height?: number;
+  gender?: string;
+  climate?: string;
+  exercise_frequency?: string;
+  age?: number;
+}
+
+/**
+ * Calculate daily hydration goal based on user profile
+ * @param user User profile details
+ * @returns Daily goal in milliliters
+ */
+function calculateDailyGoal(user: UserDetails | null): number {
+  if (!user || !user.weight) {
+    return 2000; // Default goal
+  }
+
+  // Base calculation: weight (kg) * 35 ml
+  let goal = user.weight * 35;
+
+  // Climate modifier
+  if (user.climate === 'Tropical' || user.climate === 'Hot') {
+    goal += 500;
+  }
+
+  // Exercise frequency modifier
+  if (user.exercise_frequency === 'high' || user.exercise_frequency === 'High' || user.exercise_frequency === 'Daily') {
+    goal += 1000;
+  } else if (user.exercise_frequency === 'moderate' || user.exercise_frequency === 'Moderate') {
+    goal += 500;
+  }
+
+  // Gender modifier
+  if (user.gender === 'Male' || user.gender === 'male') {
+    goal += 200;
+  }
+
+  // Ensure goal is within reasonable range
+  return Math.max(1500, Math.min(5000, Math.round(goal)));
+}
+
 /**
  * HYDRATION SCREEN - EXPO GO COMPATIBLE
  * 
@@ -55,10 +98,13 @@ export default function Hydration() {
   const [dynamicPresets, setDynamicPresets] = useState<number[]>([150, 200, 500, 750, 1000, 1500]);
   const [showGoalReachedModal, setShowGoalReachedModal] = useState(false);
   const [goalReachedToday, setGoalReachedToday] = useState(false); // Track if goal was already reached today
+  const [showOverhydrationModal, setShowOverhydrationModal] = useState(false);
+  const [overhydrationShownToday, setOverhydrationShownToday] = useState(false); // Track if warning shown today
   const [behindAlert, setBehindAlert] = useState<string | null>(null);
   const [showBehindAlert, setShowBehindAlert] = useState(false);
   const [customGoalInput, setCustomGoalInput] = useState('');
   const [initialGoalStep, setInitialGoalStep] = useState<'choice' | 'custom'>('choice');
+  const [deletedTimestamps, setDeletedTimestamps] = useState<Set<string>>(new Set()); // Track deleted entry timestamps
 
   const anim = useRef(new Animated.Value(0)).current;
   const { scaleAnim, opacityAnim, trigger: triggerCelebration } = useCelebrationAnimation();
@@ -106,7 +152,7 @@ export default function Hydration() {
     return () => subscription.remove();
   }, [goal]);
 
-  // FIX #1: Reset goalReachedToday at midnight each day
+  // FIX #1: Reset goalReachedToday and overhydrationShownToday at midnight each day
   useEffect(() => {
     const checkMidnight = () => {
       const now = new Date();
@@ -115,8 +161,9 @@ export default function Hydration() {
       const msUntilMidnight = midnight.getTime() - now.getTime();
       
       const timer = setTimeout(() => {
-        console.log('Midnight reset: clearing goalReachedToday flag');
+        console.log('Midnight reset: clearing flags');
         setGoalReachedToday(false);
+        setOverhydrationShownToday(false);
         // Recursively check again for next midnight
         checkMidnight();
       }, msUntilMidnight);
@@ -209,7 +256,11 @@ export default function Hydration() {
         if (local) {
           const parsed = JSON.parse(local);
           setGoal(parsed.goal ?? 2000);
-          setEntries(parsed.entries ?? []);
+          // Filter out any deleted entries
+          const filteredEntries = (parsed.entries ?? []).filter((e: any) => 
+            !deletedTimestamps.has(e.timestamp)
+          );
+          setEntries(filteredEntries);
         }
         // then try server
         if (token) {
@@ -217,15 +268,8 @@ export default function Hydration() {
           if (res) {
             setUserProfile(res.user_profile); // Store user profile for calculations
             
-            // Calculate dynamic goal based on user profile
-            const calculatedGoal = calculateDailyWaterGoal({
-              weight: res.user_profile?.weight,
-              height: res.user_profile?.height,
-              gender: res.user_profile?.gender,
-              climate: res.user_profile?.climate,
-              exercise_frequency: res.user_profile?.exercise_frequency,
-              age: res.user_profile?.age,
-            });
+            // Calculate dynamic goal based on user profile using new function
+            const calculatedGoal = calculateDailyGoal(res.user_profile);
             
             // Use calculated goal if it differs significantly from stored goal
             const finalGoal = res.goal ?? calculatedGoal ?? 2000;
@@ -236,12 +280,22 @@ export default function Hydration() {
             const presets = getDynamicQuickAddPresets(finalGoal);
             setDynamicPresets(presets);
             
-            setEntries(res.entries ?? []);
+            // Filter out deleted entries from server response
+            const serverEntries = (res.entries ?? []).filter((e: any) => 
+              !deletedTimestamps.has(e.timestamp)
+            );
+            setEntries(serverEntries);
             setMissedCount((res.missed || []).length || 0);
-            await AsyncStorage.setItem('hydration', JSON.stringify({ ...res, goal: finalGoal }));
+            
+            // Save filtered entries to AsyncStorage
+            await AsyncStorage.setItem('hydration', JSON.stringify({ 
+              ...res, 
+              goal: finalGoal,
+              entries: serverEntries 
+            }));
             
             // FIX #1: Check if goal was already reached today (prevent modal flashing on re-render)
-            const todayTotal = (res.entries ?? []).filter((e: any) => {
+            const todayTotal = serverEntries.filter((e: any) => {
               const entryDate = new Date(e.timestamp).toDateString();
               const today = new Date().toDateString();
               return entryDate === today;
@@ -266,7 +320,7 @@ export default function Hydration() {
       }
     }
     load();
-  }, [token]);
+  }, [token, deletedTimestamps]);
 
   useEffect(() => {
     async function loadHistory() {
@@ -336,16 +390,12 @@ export default function Hydration() {
       notificationManager.showGoalCompletionAlert('hydration', goal);
     }
     
-    // FIX #2: Over-hydration warnings - ONLY show if success modal is NOT visible
-    // This prevents the black layer (double backdrop) issue
+    // Check for overhydration (>150% of goal) - only show once per day
     const currentPercentage = (newTotal / goal) * 100;
-    if (!showGoalReachedModal && goalReachedToday) {
-      // User already acknowledged goal completion, now check for over-hydration
-      if (currentPercentage > 130) {
-        notificationManager.showOverhydrationWarning(currentPercentage, newTotal);
-      } else if (currentPercentage > 110) {
-        notificationManager.showOverhydrationWarning(currentPercentage, newTotal);
-      }
+    const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
+    if (justExceeded150 && !overhydrationShownToday) {
+      setShowOverhydrationModal(true);
+      setOverhydrationShownToday(true);
     }
     
     // Check if behind on hydration pace (only if not yet reached goal)
@@ -439,6 +489,11 @@ export default function Hydration() {
     }
   }
 
+  /**
+   * Permanently delete a hydration entry
+   * Updates local state, AsyncStorage, and syncs with backend
+   * @param index Index of the entry in the entries array
+   */
   async function deleteEntry(index: number) {
     Alert.alert(
       'Delete Entry',
@@ -454,31 +509,72 @@ export default function Hydration() {
             
             if (!deletedEntry) {
               console.log('Entry not found at index:', index);
+              Alert.alert('Error', 'Entry not found');
               return;
             }
             
+            // Track deleted timestamp to prevent restoration
+            setDeletedTimestamps(prev => new Set(prev).add(deletedEntry.timestamp));
+            
+            // Remove from array
             newEntries.splice(index, 1);
             
+            // Update local state immediately for instant UI update
             setEntries(newEntries);
-            await persistLocal({ goal, entries: newEntries });
             
-            // Sync with server
+            // Persist to AsyncStorage to prevent restoration on refresh
+            try {
+              await AsyncStorage.setItem('hydration', JSON.stringify({ 
+                goal, 
+                entries: newEntries 
+              }));
+              console.log('Entry deleted from AsyncStorage');
+            } catch (storageErr) {
+              console.error('AsyncStorage delete error:', storageErr);
+            }
+            
+            // Sync deletion with backend server
             if (token && deletedEntry) {
               try {
+                // Use POST method for deletion (backend expects timestamp in body)
                 await api.post('/hydration/delete', { 
                   timestamp: deletedEntry.timestamp 
                 }, token as string);
-              } catch (err:any) {
-                console.log('Delete sync error', err);
+                console.log('Entry deleted from server');
+                
+                // Reload full hydration data from server to ensure consistency
+                const refreshedData = await api.get('/hydration', token as string);
+                if (refreshedData && refreshedData.entries) {
+                  // Filter out deleted entries
+                  const filteredEntries = refreshedData.entries.filter((e: any) => 
+                    !deletedTimestamps.has(e.timestamp) && e.timestamp !== deletedEntry.timestamp
+                  );
+                  setEntries(filteredEntries);
+                  // Update AsyncStorage with server data
+                  await AsyncStorage.setItem('hydration', JSON.stringify({
+                    goal,
+                    entries: filteredEntries
+                  }));
+                }
+              } catch (err: any) {
+                console.error('Server delete sync error:', err);
+                // Keep local deletion even if server sync fails
+                Alert.alert(
+                  'Warning', 
+                  'Entry deleted locally but server sync failed. It will be removed on next sync.',
+                  [{ text: 'OK' }]
+                );
               }
             }
             
-            // Reload calendar data to reflect deletion
+            // Reload calendar data to reflect deletion immediately
             if (token) {
               try {
                 const h = await api.get(`/hydration/history?range=${historyRange}`, token as string);
                 setHistoryData(h || []);
-              } catch (e) { console.log('history reload err', e); }
+              } catch (e) { 
+                console.log('History reload error:', e); 
+              }
             }
           }
         }
@@ -700,17 +796,7 @@ export default function Hydration() {
                     </Text>
                     
                     {day.amount > 0 && (
-                      <View style={[styles.hydrationIndicator, { backgroundColor: hydrationLevel.color + '20' }]}>
-                        <Ionicons 
-                          name={hydrationLevel.icon as any} 
-                          size={16} 
-                          color={hydrationLevel.color} 
-                        />
-                      </View>
-                    )}
-                    
-                    {day.amount > 0 && (
-                      <Text style={styles.dayAmount}>{Math.round(day.amount)}ml</Text>
+                      <View style={styles.blueDotIndicator} />
                     )}
                   </TouchableOpacity>
                 );
@@ -869,10 +955,10 @@ export default function Hydration() {
         <View style={styles.modalOverlay}>
           <Animated.View style={[styles.celebrationContainer, { transform: [{ scale: scaleAnim }], opacity: opacityAnim }]}>
             <View style={styles.modalContent}>
-              <Ionicons name="checkmark-circle" size={60} color="#10B981" style={{ marginBottom: 16 }} />
-              <Text style={styles.celebrationTitle}>🎉 Goal Achieved!</Text>
+              <Ionicons name="trophy" size={60} color="#F59E0B" style={{ marginBottom: 16 }} />
+              <Text style={styles.celebrationTitle}>🎉 Hydration Goal Reached!</Text>
               <Text style={styles.celebrationMessage}>
-                Amazing! You've reached your daily hydration goal of {goal}ml. Keep up the great work!
+                Great job keeping your body fueled! You've reached your daily hydration goal of {goal}ml.
               </Text>
               <View style={styles.celebrationStats}>
                 <View style={styles.statBox}>
@@ -892,6 +978,40 @@ export default function Hydration() {
               </TouchableOpacity>
             </View>
           </Animated.View>
+        </View>
+      </Modal>
+
+      {/* Overhydration Warning Modal (>150%) */}
+      <Modal
+        visible={showOverhydrationModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowOverhydrationModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Ionicons name="warning" size={60} color="#EF4444" style={{ marginBottom: 16 }} />
+            <Text style={styles.overhydrationTitle}>⚠️ Whoa there!</Text>
+            <Text style={styles.overhydrationMessage}>
+              You've exceeded 150% of your goal. Drinking too much water can dilute electrolytes. Listen to your body.
+            </Text>
+            <View style={styles.celebrationStats}>
+              <View style={styles.statBox}>
+                <Text style={[styles.celebrationStatValue, { color: '#EF4444' }]}>{fmt(totalToday())}</Text>
+                <Text style={styles.celebrationStatLabel}>Total Intake</Text>
+              </View>
+              <View style={styles.statBox}>
+                <Text style={[styles.celebrationStatValue, { color: '#EF4444' }]}>{Math.round((totalToday() / goal) * 100)}%</Text>
+                <Text style={styles.celebrationStatLabel}>of Goal</Text>
+              </View>
+            </View>
+            <TouchableOpacity 
+              style={[styles.celebrationButton, { backgroundColor: '#EF4444' }]}
+              onPress={() => setShowOverhydrationModal(false)}
+            >
+              <Text style={styles.celebrationButtonText}>I Understand</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </Modal>
 
@@ -1118,8 +1238,7 @@ const styles = StyleSheet.create({
   calendarDayTextOtherMonth: { color:'#9CA3AF' },
   calendarDayTextToday: { color:'#1D4ED8', fontWeight:'700' },
   calendarDayTextSelected: { color:'white', fontWeight:'700' },
-  hydrationIndicator: { position:'absolute', bottom:2, alignSelf:'center', padding: 1, borderRadius: 6, borderWidth: 1.5, backgroundColor: 'transparent' },
-  dayAmount: { fontSize:8, color:'#6B7280', fontWeight:'500', position:'absolute', bottom:14, alignSelf:'center' },
+  blueDotIndicator: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#3B82F6', position: 'absolute', bottom: 4, alignSelf: 'center' },
   selectedDayDetails: { backgroundColor:'#F8FAFC', borderRadius:12, padding:16, marginTop:8 },
   selectedDayTitle: { fontSize:16, fontWeight:'600', color:'#1F2937', marginBottom:12 },
   dayStats: { flexDirection:'row', justifyContent:'space-around', marginBottom: 16 },
@@ -1191,6 +1310,8 @@ const styles = StyleSheet.create({
   celebrationStatLabel: { fontSize: 12, color: '#6B7280', fontWeight: '500' },
   celebrationButton: { paddingVertical: 14, paddingHorizontal: 32, backgroundColor: '#10B981', borderRadius: 10, marginTop: 12 },
   celebrationButtonText: { color: 'white', fontWeight: '700', fontSize: 16, textAlign: 'center' },
+  overhydrationTitle: { fontSize: 26, fontWeight: '900', color: '#EF4444', marginBottom: 12, textAlign: 'center' },
+  overhydrationMessage: { fontSize: 16, color: '#6B7280', marginBottom: 20, textAlign: 'center', lineHeight: 24 },
   // Alert styles
   alertOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0, 0, 0, 0.3)', justifyContent: 'flex-end', zIndex: 999 },
   alertContent: { backgroundColor: 'white', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 24, paddingBottom: 32 },

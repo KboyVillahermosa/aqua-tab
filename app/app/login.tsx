@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, Dimensions } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, Dimensions, Animated, Easing } from 'react-native';
 import { useRouter } from 'expo-router';
 import * as api from './api';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +15,9 @@ export default function Login() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const headerOpacity = React.useRef(new Animated.Value(0)).current;
+  const cardTranslate = React.useRef(new Animated.Value(30)).current;
+  const cardOpacity = React.useRef(new Animated.Value(0)).current;
 
   // Setup AuthSession request at the top-level (hooks must be called at top level)
   // Generate a redirect URI. In some dev setups makeRedirectUri returns an exp:// deep link
@@ -55,6 +58,28 @@ export default function Login() {
       // console.log('AuthSession response changed', response);
     }
   }, [response]);
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(headerOpacity, {
+        toValue: 1,
+        duration: 350,
+        useNativeDriver: true,
+      }),
+      Animated.timing(cardTranslate, {
+        toValue: 0,
+        duration: 450,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(cardOpacity, {
+        toValue: 1,
+        duration: 450,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  }, [cardOpacity, cardTranslate, headerOpacity]);
 
   async function onLogin() {
     if (!email || !password) {
@@ -116,7 +141,7 @@ export default function Login() {
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       {/* Curved Header Background */}
-      <View style={styles.headerContainer}>
+      <Animated.View style={[styles.headerContainer, { opacity: headerOpacity }]}>        
         <View style={styles.header}>
           <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
             <Ionicons name="arrow-back" size={24} color="white" />
@@ -135,19 +160,20 @@ export default function Login() {
             fill="#1E3A8A"
           />
         </Svg>
-      </View>
+      </Animated.View>
 
       {/* Main Content Card */}
-      <View style={styles.contentCard}>
+      <Animated.View style={[styles.contentCard, { opacity: cardOpacity, transform: [{ translateY: cardTranslate }] }]}>
         {/* Title Section */}
         <View style={styles.titleSection}>
           <Text style={styles.title}>Sign In</Text>
           <Text style={styles.subtitle}>Welcome back</Text>
+          <Text style={styles.helper}>Access your account to stay on track</Text>
         </View>
 
         {/* Form Inputs */}
         <View style={styles.inputContainer}>
-          <View style={styles.inputWrapper}>
+          <View style={[styles.inputWrapper, styles.elevatedField]}>
             <Ionicons name="mail-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
             <TextInput
               placeholder="Email Address"
@@ -160,7 +186,7 @@ export default function Login() {
             />
           </View>
 
-          <View style={styles.inputWrapper}>
+          <View style={[styles.inputWrapper, styles.elevatedField]}>
             <Ionicons name="lock-closed-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
             <TextInput
               placeholder="Password"
@@ -222,7 +248,7 @@ export default function Login() {
             New member? <Text style={styles.bottomLinkHighlight}>Sign up</Text>
           </Text>
         </TouchableOpacity>
-      </View>
+      </Animated.View>
     </ScrollView>
   );
 }
@@ -286,6 +312,11 @@ const styles = StyleSheet.create({
     color: '#6B7280',
     fontWeight: '400',
   },
+  helper: {
+    fontSize: 13,
+    color: '#9CA3AF',
+    marginTop: 6,
+  },
   inputContainer: {
     marginBottom: 16,
   },
@@ -299,6 +330,15 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     marginBottom: 16,
     backgroundColor: '#F9FAFB',
+  },
+  elevatedField: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 3,
   },
   inputIcon: {
     marginRight: 12,

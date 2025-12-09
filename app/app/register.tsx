@@ -25,6 +25,14 @@ export default function Register() {
   const [agreeTerms, setAgreeTerms] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const displayGender = gender
+    ? gender.replace(/\b\w/g, (letter) => letter.toUpperCase())
+    : 'Gender (Optional)';
+
+  const displayEmail = email
+    ? email.charAt(0).toUpperCase() + email.slice(1)
+    : '';
+
   async function onRegister() {
     if (!name || !email || !password || !confirmPassword) {
       Alert.alert('Validation', 'Please fill all required fields');
@@ -127,7 +135,7 @@ export default function Register() {
             <Ionicons name="mail-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
             <TextInput
               placeholder="Email Address"
-              value={email}
+              value={displayEmail}
               onChangeText={setEmail}
               keyboardType="email-address"
               autoCapitalize="none"
@@ -179,7 +187,7 @@ export default function Register() {
           </View>
 
           <TouchableOpacity 
-            style={styles.inputWrapper}
+            style={[styles.inputWrapper, styles.selectInput]}
             onPress={() => setShowDatePicker(true)}
           >
             <Ionicons name="calendar-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
@@ -190,12 +198,12 @@ export default function Register() {
           </TouchableOpacity>
 
           <TouchableOpacity 
-            style={styles.inputWrapper}
+            style={[styles.inputWrapper, styles.selectInput]}
             onPress={() => setShowGenderPicker(true)}
           >
             <Ionicons name="person-outline" size={20} color="#8E8E93" style={styles.inputIcon} />
             <Text style={[styles.input, !gender && { color: '#8E8E93' }]}>
-              {gender || 'Gender (Optional)'}
+              {displayGender}
             </Text>
             <Ionicons name="chevron-down-outline" size={20} color="#8E8E93" />
           </TouchableOpacity>
@@ -206,9 +214,7 @@ export default function Register() {
               placeholder="Address (Optional)"
               value={address}
               onChangeText={setAddress}
-              multiline
-              numberOfLines={3}
-              style={[styles.input, { minHeight: 60, textAlignVertical: 'top' }]}
+              style={styles.input}
               placeholderTextColor="#8E8E93"
             />
           </View>
@@ -225,7 +231,7 @@ export default function Register() {
             <View style={styles.modalContent}>
               <Text style={styles.modalTitle}>Select Gender</Text>
               <TouchableOpacity 
-                style={styles.modalOption}
+                style={[styles.modalOption, styles.modalOptionCard]}
                 onPress={() => {
                   setGender('male');
                   setShowGenderPicker(false);
@@ -234,7 +240,7 @@ export default function Register() {
                 <Text style={styles.modalOptionText}>Male</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.modalOption}
+                style={[styles.modalOption, styles.modalOptionCard]}
                 onPress={() => {
                   setGender('female');
                   setShowGenderPicker(false);
@@ -243,22 +249,13 @@ export default function Register() {
                 <Text style={styles.modalOptionText}>Female</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.modalOption}
+                style={[styles.modalOption, styles.modalOptionCard]}
                 onPress={() => {
                   setGender('other');
                   setShowGenderPicker(false);
                 }}
               >
                 <Text style={styles.modalOptionText}>Other</Text>
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={[styles.modalOption, { borderTopWidth: 1, borderTopColor: '#E5E7EB' }]}
-                onPress={() => {
-                  setGender('');
-                  setShowGenderPicker(false);
-                }}
-              >
-                <Text style={[styles.modalOptionText, { color: '#6B7280' }]}>Clear</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={styles.modalCancel}
@@ -282,7 +279,8 @@ export default function Register() {
               <Text style={styles.modalTitle}>Select Date of Birth</Text>
               
               {/* Simple Year/Month/Day Selectors */}
-              <View style={styles.datePickerContainer}>
+              <View style={styles.datePickerCard}>
+                <View style={styles.datePickerContainer}>
                 <View style={styles.dateColumn}>
                   <Text style={styles.dateLabel}>Year</Text>
                   <ScrollView style={styles.dateScroll} showsVerticalScrollIndicator={false}>
@@ -349,6 +347,7 @@ export default function Register() {
                   </ScrollView>
                 </View>
               </View>
+              </View>
 
               <TouchableOpacity 
                 style={styles.modalConfirm}
@@ -364,16 +363,6 @@ export default function Register() {
               </TouchableOpacity>
               
               <TouchableOpacity 
-                style={styles.modalOption}
-                onPress={() => {
-                  setDateOfBirth('');
-                  setShowDatePicker(false);
-                }}
-              >
-                <Text style={[styles.modalOptionText, { color: '#6B7280' }]}>Clear</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity 
                 style={styles.modalCancel}
                 onPress={() => setShowDatePicker(false)}
               >
@@ -382,17 +371,6 @@ export default function Register() {
             </View>
           </View>
         </Modal>
-
-        {/* Medication Adherence Section */}
-        <View style={styles.medicationSection}>
-          <View style={styles.medicationHeader}>
-            <Ionicons name="medical" size={20} color="#1E3A8A" style={styles.medicationIcon} />
-            <Text style={styles.medicationText}>Never miss a dose</Text>
-          </View>
-          <Text style={styles.medicationDescription}>
-            We'll help you stay on track with your medications and health goals.
-          </Text>
-        </View>
 
         {/* Terms Checkbox */}
         <TouchableOpacity style={styles.termsContainer} onPress={() => setAgreeTerms(!agreeTerms)}>
@@ -527,6 +505,15 @@ const styles = StyleSheet.create({
     color: '#1F2937',
     fontWeight: '400',
   },
+  selectInput: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#D1D5DB',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 3,
+  },
   eyeIcon: {
     padding: 4,
   },
@@ -660,15 +647,22 @@ const styles = StyleSheet.create({
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'flex-end',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   modalContent: {
     backgroundColor: 'white',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 20,
-    paddingBottom: 40,
-    paddingHorizontal: 20,
+    borderRadius: 20,
+    paddingTop: 24,
+    paddingBottom: 28,
+    paddingHorizontal: 22,
+    width: '92%',
+    maxWidth: 460,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.2,
+    shadowRadius: 16,
+    elevation: 12,
   },
   modalTitle: {
     fontSize: 18,
@@ -682,26 +676,46 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#E5E7EB',
   },
+  modalOptionCard: {
+    backgroundColor: '#F9FAFB',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    marginBottom: 12,
+  },
   modalOptionText: {
     fontSize: 16,
     color: '#1F2937',
     fontWeight: '500',
   },
   modalCancel: {
-    marginTop: 20,
-    paddingVertical: 16,
+    marginTop: 12,
+    paddingVertical: 14,
     alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    borderRadius: 12,
+    backgroundColor: '#F9FAFB',
   },
   modalCancelText: {
     fontSize: 16,
-    color: '#EF4444',
+    color: '#1F2937',
     fontWeight: '600',
   },
   datePickerContainer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     height: 200,
-    marginBottom: 20,
+    marginBottom: 4,
+  },
+  datePickerCard: {
+    backgroundColor: '#F9FAFB',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
   },
   dateColumn: {
     flex: 1,

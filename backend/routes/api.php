@@ -64,6 +64,7 @@ Route::middleware([\App\Http\Middleware\TokenAuth::class])->group(function () {
     Route::get('hydration', [App\Http\Controllers\HydrationController::class, 'index']);
     Route::post('hydration', [App\Http\Controllers\HydrationController::class, 'add']);
     Route::post('hydration/goal', [App\Http\Controllers\HydrationController::class, 'setGoal']);
+    Route::post('hydration/delete', [App\Http\Controllers\HydrationController::class, 'delete']);
     Route::get('hydration/history', [App\Http\Controllers\HydrationController::class, 'history']);
     Route::post('hydration/missed', [App\Http\Controllers\HydrationController::class, 'missed']);
 

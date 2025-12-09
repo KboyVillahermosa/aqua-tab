@@ -1,7 +1,7 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as api from './api';
 import BottomNavigation from './components/navigation/BottomNavigation';
@@ -238,6 +238,37 @@ export default function Home() {
     }
   }, [subscription, token]);
 
+  // Real-time hydration data refresh when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (!token || loading) return;
+
+      const refreshHydrationData = async () => {
+        try {
+          const hydrationRes = await api.get('/hydration', token as string, 3000).catch(() => null);
+          if (hydrationRes) {
+            const todayTotal = (hydrationRes.entries ?? []).filter((e: any) => {
+              const entryDate = new Date(e.timestamp).toDateString();
+              const today = new Date().toDateString();
+              return entryDate === today;
+            }).reduce((sum: number, e: any) => sum + e.amount_ml, 0);
+            
+            const hydrationPercentage = Math.round((todayTotal / (hydrationRes.goal || 2000)) * 100);
+            
+            setQuickStatus(prev => ({
+              ...prev,
+              hydrationPercentage
+            }));
+          }
+        } catch (err) {
+          console.log('Hydration refresh error', err);
+        }
+      };
+      
+      refreshHydrationData();
+    }, [token, loading])
+  );
+
   // Real-time hydration polling - refresh every 10 seconds
   useEffect(() => {
     if (!token || loading) return;
@@ -305,10 +336,9 @@ export default function Home() {
   };
 
   const menuItems = [
-    { label: 'Settings', icon: 'settings-outline', route: '/components/pages/settings/Settings' },
     { label: 'Profile', icon: 'person-outline', route: '/components/pages/profile/Profile' },
+    { label: 'Settings', icon: 'settings-outline', route: '/components/pages/settings/Settings' },
     { label: 'Help & Support', icon: 'help-circle-outline', route: null },
-    { label: 'Insights', icon: 'analytics-outline', route: '/insights' },
   ];
 
   const handleMenuAction = (item: typeof menuItems[0]) => {
@@ -532,98 +562,92 @@ export default function Home() {
             </View>
           )}
 
-          {/* Quick Status Card */}
-          <View style={styles.statusCard}>
-          <View style={styles.statusText}>
-            <Text style={styles.statusTitle}>
-              Quick status: {quickStatus.medicationsLeft} medication{quickStatus.medicationsLeft !== 1 ? 's' : ''} left today • {quickStatus.hydrationPercentage}% hydration reached
-            </Text>
-          </View>
-          <View style={styles.statusIllustration}>
-            <Ionicons name="medical" size={32} color="#3B82F6" />
-          </View>
-          </View>
-
-          {/* Categories Section */}
+          {/* Summary Cards Section */}
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Categories</Text>
-            <TouchableOpacity style={styles.seeAllButton}>
-              <Ionicons name="chevron-forward" size={20} color="#6B7280" />
-            </TouchableOpacity>
+            <Text style={styles.sectionTitle}>Quick Overview</Text>
           </View>
 
-          <View style={styles.categoriesGrid}>
-            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}>
-              <Ionicons name="medical" size={32} color="white" />
-              <Text style={styles.categoryText}>Medication</Text>
+          {/* Hydration Summary Card */}
+          <TouchableOpacity 
+            style={styles.summaryCard}
+            onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.summaryCardHeader}>
+              <View>
+                <Text style={styles.summaryCardTitle}>Hydration Goal</Text>
+                <Text style={styles.summaryCardSubtitle}>{quickStatus.hydrationPercentage}% completed</Text>
+              </View>
+              <Ionicons name="water" size={32} color="#3B82F6" />
+            </View>
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBar, { width: `${Math.min(quickStatus.hydrationPercentage, 100)}%` }]} />
+            </View>
+            <TouchableOpacity style={styles.quickActionButton} activeOpacity={0.8}>
+              <Ionicons name="add" size={20} color="white" />
+              <Text style={styles.quickActionText}>Log +250ml</Text>
             </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/hydration/Hydration', params: { token } } as any)}>
-              <Ionicons name="water" size={32} color="white" />
-              <Text style={styles.categoryText}>Hydration</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/components/pages/notification/Notification', params: { token } } as any)}>
-              <Ionicons name="notifications" size={32} color="white" />
-              <Text style={styles.categoryText}>Reminders</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.categoryCard} onPress={() => router.push({ pathname: '/insights', params: { token } } as any)}>
-              <Ionicons name="analytics" size={32} color="white" />
-              <Text style={styles.categoryText}>Insights</Text>
-            </TouchableOpacity>
-          </View>
+          </TouchableOpacity>
+
+          {/* Medication Summary Card */}
+          <TouchableOpacity 
+            style={styles.summaryCard}
+            onPress={() => router.push({ pathname: '/components/pages/medication/Medication', params: { token } } as any)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.summaryCardHeader}>
+              <View>
+                <Text style={styles.summaryCardTitle}>Medications</Text>
+                <Text style={styles.summaryCardSubtitle}>
+                  {quickStatus.medicationsLeft === 0 ? 'No more meds today!' : `${quickStatus.medicationsLeft} remaining today`}
+                </Text>
+              </View>
+              <Ionicons name="medkit" size={32} color="#EF4444" />
+            </View>
+            <View style={styles.progressBarContainer}>
+              <View style={[styles.progressBar, { width: '65%', backgroundColor: '#EF4444' }]} />
+            </View>
+            {quickStatus.medicationsLeft > 0 && (
+              <Text style={styles.nextMedicationText}>
+                {timeline.find(t => t.type === 'medication' && t.status === 'upcoming')?.title || 'Check timeline for details'}
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Smart Insights Card */}
+          <TouchableOpacity 
+            style={styles.summaryCard}
+            onPress={() => {
+              if (subscription?.plan_slug === 'premium') {
+                router.push({ pathname: '/insights', params: { token } } as any);
+              } else {
+                setPremiumPopupVisible(true);
+              }
+            }}
+            activeOpacity={0.7}
+          >
+            <View style={styles.summaryCardHeader}>
+              <View>
+                <Text style={styles.summaryCardTitle}>Smart Insights</Text>
+                <Text style={styles.summaryCardSubtitle}>
+                  {subscription?.plan_slug === 'premium' ? 'Weekly Adherence: 85%' : 'Unlock to see patterns'}
+                </Text>
+              </View>
+              {subscription?.plan_slug === 'premium' ? (
+                <Ionicons name="analytics" size={32} color="#F59E0B" />
+              ) : (
+                <Ionicons name="lock-closed" size={32} color="#F59E0B" />
+              )}
+            </View>
+            {subscription?.plan_slug === 'premium' && weeklyReport && (
+              <View style={styles.progressBarContainer}>
+                <View style={[styles.progressBar, { width: '85%', backgroundColor: '#F59E0B' }]} />
+              </View>
+            )}
+          </TouchableOpacity>
 
           {/* Divider after Categories */}
           <View style={styles.sectionDivider} />
-        </View>
-
-        {/* Timeline Section (Sticky Header) */}
-        <View style={[styles.sectionHeader, styles.stickyHeader]}>
-          <Text style={styles.sectionTitle}>Today&apos;s Timeline</Text>
-        </View>
-
-        <View style={styles.timelineCard}>
-          {timeline.length > 0 ? (
-            timeline.map((item, index) => (
-              <View key={item.id || index} style={styles.timelineItem}>
-                <View style={styles.timelineItemContent}>
-                  <View style={styles.timelineLeft}>
-                    <View style={[styles.timelineDot, { backgroundColor: getStatusColor(item.status) }]} />
-                    {index < timeline.length - 1 && <View style={styles.timelineLine} />}
-                  </View>
-                  <View style={styles.timelineRight}>
-                    <View style={styles.timelineHeader}>
-                      <Text style={styles.timelineTime}>{item.time || 'N/A'}</Text>
-                      <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.status) + '20' }]}>
-                        <Text style={[styles.statusBadgeText, { color: getStatusColor(item.status) }]}>
-                          {item.status_emoji || '📋'} {item.status_text || item.status}
-                        </Text>
-                      </View>
-                    </View>
-                    <View style={styles.timelineActivityRow}>
-                      <Ionicons
-                        name={getTypeIcon(item.type) as any}
-                        size={18}
-                        color="#FFFFFF"
-                        style={styles.timelineIcon}
-                      />
-                      <Text style={styles.timelineActivity}>{item.title || 'Reminder'}</Text>
-                    </View>
-                    {item.body && (
-                      <Text style={styles.timelineBody}>{item.body}</Text>
-                    )}
-                  </View>
-                </View>
-              </View>
-            ))
-          ) : (
-            <View style={styles.timelineEmpty}>
-              <Ionicons name="calendar-outline" size={48} color="#93C5FD" style={styles.emptyIcon} />
-              <Text style={styles.timelineEmptyText}>No scheduled reminders for today</Text>
-              <Text style={styles.timelineEmptySubtext}>Your timeline will appear here when you have reminders</Text>
-            </View>
-          )}
         </View>
 
       </ScrollView>
@@ -1111,6 +1135,94 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 255, 255, 0.6)',
     fontSize: 13,
     textAlign: 'center',
+  },
+  // Summary Cards Styles
+  summaryCard: {
+    backgroundColor: 'white',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  summaryCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 12,
+  },
+  summaryCardTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginBottom: 4,
+  },
+  summaryCardSubtitle: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontWeight: '500',
+  },
+  progressBarContainer: {
+    height: 8,
+    backgroundColor: '#E5E7EB',
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 10,
+  },
+  progressBar: {
+    height: '100%',
+    backgroundColor: '#3B82F6',
+    borderRadius: 4,
+  },
+  quickActionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#3B82F6',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    justifyContent: 'center',
+    gap: 6,
+  },
+  quickActionText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  nextMedicationText: {
+    fontSize: 13,
+    color: '#6B7280',
+    fontWeight: '500',
+    marginTop: 2,
+  },
+  allCaughtUpContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  emptyStateIconCircle: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#EFF6FF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 20,
+  },
+  allCaughtUpText: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#1F2937',
+    marginTop: 16,
+  },
+  allCaughtUpSubtext: {
+    fontSize: 14,
+    color: '#6B7280',
+    marginTop: 8,
   },
   // Menu Modal Styles
   menuOverlay: {
@@ -1601,3 +1713,4 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
 });
+

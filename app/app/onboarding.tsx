@@ -52,7 +52,7 @@ export default function Onboarding() {
   // Time picker states
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [timePickerField, setTimePickerField] = useState<string | null>(null);
-  const [tempTime, setTempTime] = useState<Date>(new Date());
+  const [tempTime, setTempTime] = useState<Date | null>(null);
   
   // Picker states
   const [showWeightPicker, setShowWeightPicker] = useState(false);
@@ -114,6 +114,14 @@ export default function Onboarding() {
     loadSavedData();
   }, [token]);
 
+  // Update tempTime when time picker opens with the correct default
+  useEffect(() => {
+    if (showTimePicker && timePickerField && !tempTime) {
+      const currentTime = parseTimeToDate(data[timePickerField as keyof OnboardingData] as string, timePickerField);
+      setTempTime(currentTime);
+    }
+  }, [showTimePicker, timePickerField]);
+
   const updateData = (key: keyof OnboardingData, value: any) => {
     setData(prev => ({ ...prev, [key]: value }));
   };
@@ -159,15 +167,35 @@ export default function Onboarding() {
     }
   };
 
-  const parseTimeToDate = (timeString?: string): Date => {
+  // Map field names to their default times (in 24-hour format)
+  const getDefaultTimeForField = (field: string): [number, number] => {
+    const defaults: { [key: string]: [number, number] } = {
+      wake_up_time: [8, 0],          // 08:00 AM
+      first_medication_time: [8, 0], // 08:00 AM
+      end_of_day_time: [23, 0],      // 11:00 PM
+      breakfast_time: [8, 0],        // 08:00 AM
+      lunch_time: [12, 0],           // 12:00 PM
+      dinner_time: [19, 0],          // 07:00 PM
+      // Additional medication times (if needed in future)
+      medication_afternoon_time: [13, 0],   // 01:00 PM
+      medication_evening_time: [20, 0],    // 08:00 PM
+    };
+    return defaults[field] || [8, 0];
+  };
+
+  const parseTimeToDate = (timeString?: string, field?: string): Date => {
     if (!timeString) {
-      return new Date();
+      // Use field-specific default if no saved value
+      const [hour, minutes] = getDefaultTimeForField(field || '');
+      const date = new Date();
+      date.setHours(hour, minutes, 0, 0);
+      return date;
     }
     try {
       const [time, period] = timeString.split(' ');
-      const [hours, minutes] = time.split(':');
+      const [hours, minutesStr] = time.split(':');
       let hour = parseInt(hours);
-      const min = parseInt(minutes || '0');
+      const min = parseInt(minutesStr || '0');
       
       if (period) {
         // 12-hour format
@@ -179,14 +207,17 @@ export default function Onboarding() {
       date.setHours(hour, min, 0, 0);
       return date;
     } catch {
-      return new Date();
+      // On parse error, return field-specific default
+      const [hour, minutes] = getDefaultTimeForField(field || '');
+      const date = new Date();
+      date.setHours(hour, minutes, 0, 0);
+      return date;
     }
   };
 
   const openTimePicker = (field: string) => {
-    const currentTime = parseTimeToDate(data[field as keyof OnboardingData] as string);
-    setTempTime(currentTime);
     setTimePickerField(field);
+    setTempTime(null); // Reset to trigger useEffect with correct default
     setShowTimePicker(true);
   };
 
@@ -834,7 +865,7 @@ export default function Onboarding() {
                 </TouchableOpacity>
               </View>
               <DateTimePicker
-                value={tempTime}
+                value={tempTime || new Date()}
                 mode="time"
                 is24Hour={false}
                 display="spinner"
@@ -851,7 +882,7 @@ export default function Onboarding() {
       {/* Time Picker for Android */}
       {Platform.OS === 'android' && showTimePicker && (
         <DateTimePicker
-          value={tempTime}
+          value={tempTime || new Date()}
           mode="time"
           is24Hour={false}
           display="default"

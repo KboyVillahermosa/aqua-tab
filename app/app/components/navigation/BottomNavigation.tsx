@@ -42,13 +42,13 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
     },
     { 
       key: 'medication', 
-      icon: 'medical', 
+      icon: 'medkit', // UPDATED: Changed to 'medkit' (Medical Bag)
       label: 'Medication',
       route: '/components/pages/medication/Medication'
     },
     { 
       key: 'notification', 
-      icon: 'notifications', 
+      icon: 'pulse', // UPDATED: Changed to 'pulse' (Activity Line)
       label: 'Activity',
       route: '/components/pages/notification/Notification'
     },
@@ -75,7 +75,7 @@ const BottomNavigation: React.FC<BottomNavigationProps> = ({ currentRoute }) => 
   };
 
   return (
-    // allow touches to pass through areas not occupied by the nav (helpful for overlapping layouts)
+    // allow touches to pass through areas not occupied by the nav
     <View style={styles.bottomNav} pointerEvents="box-none">
       {navigationItems.map((item) => (
         <TouchableOpacity

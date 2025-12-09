@@ -47,7 +47,7 @@ class HydrationController
     protected function calculateIdealGoal($user)
     {
         $baseGoal = 2000; // Default base goal in ml
-        
+
         // Weight-based calculation (30-35ml per kg)
         if ($user->weight) {
             $weightKg = $user->weight;
@@ -56,7 +56,7 @@ class HydrationController
             }
             $baseGoal = $weightKg * 33; // 33ml per kg is a good average
         }
-        
+
         // Age adjustment (older adults need slightly more, but not too much)
         if ($user->age) {
             if ($user->age >= 65) {
@@ -65,7 +65,7 @@ class HydrationController
                 $baseGoal *= 0.85; // Children need less
             }
         }
-        
+
         // Climate adjustment
         if ($user->climate) {
             switch ($user->climate) {
@@ -81,7 +81,7 @@ class HydrationController
                     break;
             }
         }
-        
+
         // Exercise frequency adjustment
         if ($user->exercise_frequency) {
             switch ($user->exercise_frequency) {
@@ -100,7 +100,7 @@ class HydrationController
                     break;
             }
         }
-        
+
         // Round to nearest 50ml for cleaner numbers
         return round($baseGoal / 50) * 50;
     }
@@ -112,13 +112,13 @@ class HydrationController
         if (!$user) {
             return response()->json(['message' => 'Unauthorized'], 401);
         }
-        
+
         // Refresh user data to get latest profile info
         $user->refresh();
-        
+
         // Calculate ideal goal based on user profile
         $idealGoal = $this->calculateIdealGoal($user);
-        
+
         // Get current goal from database, fallback to file, then ideal goal
         $goal = $user->hydration_goal ?? null;
         if (!$goal) {
@@ -131,7 +131,7 @@ class HydrationController
                 $goal = $idealGoal;
             }
         }
-        
+
         // If DB model exists, prefer DB for current day's entries
         if (class_exists(HydrationEntry::class)) {
             $today = date('Y-m-d');
@@ -139,45 +139,45 @@ class HydrationController
                 ->whereDate('created_at', $today)
                 ->orderBy('created_at', 'desc')
                 ->get()
-                ->map(function ($e) { 
+                ->map(function ($e) {
                     return [
-                        'amount_ml' => (int)$e->amount_ml, 
-                        'timestamp' => $e->created_at, 
+                        'amount_ml' => (int)$e->amount_ml,
+                        'timestamp' => $e->created_at,
                         'source' => $e->source ?? 'manual'
-                    ]; 
+                    ];
                 })
                 ->toArray();
             $file = $this->readData($user->id);
-            
+
             // Calculate today's total
             $todayTotal = array_sum(array_column($entries, 'amount_ml'));
             $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
-            
+
             return response()->json([
                 'goal' => $goal,
                 'ideal_goal' => $idealGoal,
-                'entries' => $entries, 
+                'entries' => $entries,
                 'missed' => $file['missed'] ?? [],
                 'today_total' => $todayTotal,
                 'percentage' => $percentage,
                 'remaining' => max(0, $goal - $todayTotal)
             ]);
         }
-        
+
         $data = $this->readData($user->id);
         $today = date('Y-m-d');
-        $todayEntries = array_filter($data['entries'] ?? [], function($entry) use ($today) {
+        $todayEntries = array_filter($data['entries'] ?? [], function ($entry) use ($today) {
             return strpos($entry['timestamp'] ?? '', $today) === 0;
         });
         $todayTotal = array_sum(array_column($todayEntries, 'amount_ml'));
         $percentage = $goal > 0 ? round(($todayTotal / $goal) * 100, 1) : 0;
-        
+
         $data['goal'] = $goal;
         $data['ideal_goal'] = $idealGoal;
         $data['today_total'] = $todayTotal;
         $data['percentage'] = $percentage;
         $data['remaining'] = max(0, $goal - $todayTotal);
-        
+
         return response()->json($data);
     }
 
@@ -187,7 +187,7 @@ class HydrationController
     {
         $user = $request->user();
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
-        
+
         $amount = (int) $request->input('amount_ml', 0);
         if ($amount <= 0) {
             return response()->json(['message' => 'Amount must be greater than 0'], 422);
@@ -195,7 +195,7 @@ class HydrationController
         if ($amount > 5000) {
             return response()->json(['message' => 'Amount cannot exceed 5000ml'], 422);
         }
-        
+
         $source = $request->input('source', 'manual');
         $validSources = ['manual', 'quick', 'custom', 'reminder'];
         if (!in_array($source, $validSources)) {
@@ -224,7 +224,7 @@ class HydrationController
     {
         $user = $request->user();
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
-        
+
         $goal = (int) $request->input('goal_ml', 2000);
         if ($goal <= 0) {
             return response()->json(['message' => 'Goal must be greater than 0'], 422);
@@ -235,18 +235,69 @@ class HydrationController
         if ($goal > 5000) {
             return response()->json(['message' => 'Goal cannot exceed 5000ml'], 422);
         }
-        
+
         // Save to database
         $user->hydration_goal = $goal;
         $user->save();
-        
+
         // Also update file for backward compatibility
         $data = $this->readData($user->id);
         $data['goal'] = $goal;
         $this->writeData($user->id, $data);
-        
+
         Log::debug('Hydration setGoal', ['user' => $user->id, 'goal' => $goal]);
         return response()->json(['goal' => $goal, 'message' => 'Goal updated successfully']);
+    }
+
+    // POST /api/hydration/delete
+    // body: { timestamp: string }
+    public function delete(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['message' => 'Unauthorized'], 401);
+        }
+
+        $timestamp = $request->input('timestamp');
+        if (!$timestamp) {
+            return response()->json(['message' => 'Timestamp is required'], 422);
+        }
+
+        // Delete from database if using HydrationEntry model
+        if (class_exists(HydrationEntry::class)) {
+            $deleted = HydrationEntry::where('user_id', $user->id)
+                ->where('created_at', $timestamp)
+                ->delete();
+
+            Log::debug('Hydration delete from DB', [
+                'user' => $user->id,
+                'timestamp' => $timestamp,
+                'deleted_count' => $deleted
+            ]);
+        }
+
+        // Also delete from file storage for backward compatibility
+        $data = $this->readData($user->id);
+        $originalCount = count($data['entries']);
+
+        // Filter out the entry with matching timestamp
+        $data['entries'] = array_values(array_filter($data['entries'], function ($entry) use ($timestamp) {
+            return $entry['timestamp'] !== $timestamp;
+        }));
+
+        $this->writeData($user->id, $data);
+
+        $deletedCount = $originalCount - count($data['entries']);
+        Log::debug('Hydration delete from file', [
+            'user' => $user->id,
+            'timestamp' => $timestamp,
+            'deleted_count' => $deletedCount
+        ]);
+
+        return response()->json([
+            'message' => 'Entry deleted successfully',
+            'deleted' => $deletedCount > 0
+        ]);
     }
 
     // GET /api/hydration/history?range=daily|weekly|monthly&start=YYYY-MM-DD&end=YYYY-MM-DD
@@ -254,15 +305,15 @@ class HydrationController
     {
         $user = $request->user();
         if (!$user) return response()->json(['message' => 'Unauthorized'], 401);
-        
+
         $range = $request->query('range', 'daily');
         if (!in_array($range, ['daily', 'weekly', 'monthly'])) {
             $range = 'daily';
         }
-        
+
         $startDate = $request->query('start');
         $endDate = $request->query('end');
-        
+
         // try DB first
         $entries = [];
         $file = $this->readData($user->id);
@@ -272,15 +323,15 @@ class HydrationController
                 ->get();
             foreach ($dbEntries as $e) {
                 $entries[] = [
-                    'amount_ml' => (int)$e->amount_ml, 
-                    'timestamp' => $e->created_at, 
+                    'amount_ml' => (int)$e->amount_ml,
+                    'timestamp' => $e->created_at,
                     'source' => $e->source ?? 'manual'
                 ];
             }
         } else {
             $entries = $file['entries'] ?? [];
         }
-        
+
         // Group entries by date
         $buckets = [];
         foreach ($entries as $e) {
@@ -296,12 +347,12 @@ class HydrationController
                 $out = [];
                 $current = new DateTime($startDate);
                 $end = new DateTime($endDate);
-                
+
                 while ($current <= $end) {
                     $day = $current->format('Y-m-d');
                     $amount = $buckets[$day] ?? 0;
                     $out[] = [
-                        'date' => $day, 
+                        'date' => $day,
                         'amount_ml' => $amount,
                         'is_today' => $day === date('Y-m-d'),
                         'day_name' => $current->format('D')
@@ -316,7 +367,7 @@ class HydrationController
                     $day = date('Y-m-d', strtotime("-{$i} days"));
                     $amount = $buckets[$day] ?? 0;
                     $out[] = [
-                        'date' => $day, 
+                        'date' => $day,
                         'amount_ml' => $amount,
                         'is_today' => $i === 0,
                         'day_name' => date('D', strtotime($day))
@@ -338,14 +389,14 @@ class HydrationController
                     $d = date('Y-m-d', strtotime($d . ' +1 day'));
                 }
                 $out[] = [
-                    'week_start' => $start, 
+                    'week_start' => $start,
                     'amount_ml' => $sum,
                     'week_label' => date('M j', strtotime($start))
                 ];
             }
             return response()->json($out);
         }
-        
+
         // monthly - last 12 months
         $out = [];
         for ($m = 11; $m >= 0; $m--) {
@@ -355,7 +406,7 @@ class HydrationController
                 if (strpos($day, $month) === 0) $sum += $amt;
             }
             $out[] = [
-                'month' => $month, 
+                'month' => $month,
                 'amount_ml' => $sum,
                 'month_label' => date('M Y', strtotime($month . '-01'))
             ];
@@ -391,7 +442,7 @@ class HydrationController
 
             // Get hydration data from database
             $startDate = now()->subDays($days);
-            
+
             // Calculate average daily intake per user
             $avgDailyIntake = HydrationEntry::where('created_at', '>=', $startDate)
                 ->selectRaw('user_id, DATE(created_at) as date, SUM(amount_ml) as daily_total')
@@ -404,25 +455,25 @@ class HydrationController
             if (class_exists(HydrationEntry::class)) {
                 $userGoals = [];
                 $userAchievements = [];
-                
+
                 // Get all users and their goals/achievements
                 $users = \App\Models\User::all();
                 foreach ($users as $user) {
                     $file = $this->readData($user->id);
                     $goal = $file['goal'] ?? 2000;
-                    
+
                     $dailyTotals = HydrationEntry::where('user_id', $user->id)
                         ->where('created_at', '>=', $startDate)
                         ->selectRaw('DATE(created_at) as date, SUM(amount_ml) as daily_total')
                         ->groupBy('date')
                         ->get();
-                    
+
                     foreach ($dailyTotals as $day) {
                         $achieved = $day->daily_total >= $goal ? 1 : 0;
                         $userAchievements[] = $achieved;
                     }
                 }
-                
+
                 if (count($userAchievements) > 0) {
                     $goalAchievementRate = round((array_sum($userAchievements) / count($userAchievements)) * 100, 1);
                 }
@@ -442,7 +493,7 @@ class HydrationController
                 $date = now()->subDays($i)->format('Y-m-d');
                 $totalAmount = HydrationEntry::whereDate('created_at', $date)
                     ->sum('amount_ml') ?? 0;
-                
+
                 $dailyIntake[] = [
                     'date' => $date,
                     'total_amount' => $totalAmount
@@ -455,12 +506,12 @@ class HydrationController
             for ($w = $weeks - 1; $w >= 0; $w--) {
                 $weekStart = now()->subWeeks($w)->startOfWeek();
                 $weekEnd = now()->subWeeks($w)->endOfWeek();
-                
+
                 $weekTotal = HydrationEntry::whereBetween('created_at', [$weekStart, $weekEnd])
                     ->sum('amount_ml') ?? 0;
-                
+
                 $avgIntake = $weekTotal / 7; // Average per day
-                
+
                 $weeklyTrend[] = [
                     'week' => $weekStart->format('M j'),
                     'avg_intake' => round($avgIntake)
@@ -475,10 +526,10 @@ class HydrationController
                 ->map(function ($entry) {
                     $file = $this->readData($entry->user_id);
                     $goal = $file['goal'] ?? 2000;
-                    
+
                     // Handle both Carbon instances and string dates
                     $date = is_string($entry->created_at) ? $entry->created_at : $entry->created_at->format('Y-m-d');
-                    
+
                     return [
                         'user_name' => $entry->user->name ?? 'Unknown User',
                         'total_amount' => $entry->amount_ml,
@@ -496,7 +547,6 @@ class HydrationController
                 'weekly_trend' => $weeklyTrend,
                 'recent_entries' => $recentEntries
             ]);
-
         } catch (\Exception $e) {
             Log::error('Hydration stats error', ['error' => $e->getMessage()]);
             return response()->json([
