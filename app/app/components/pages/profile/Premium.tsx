@@ -12,6 +12,7 @@ export default function Premium() {
   const insets = useSafeAreaInsets();
   const [plans, setPlans] = useState<any[] | null>(null);
   const [subscribing, setSubscribing] = useState(false);
+  const [currentPlan, setCurrentPlan] = useState<string | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -19,6 +20,10 @@ export default function Premium() {
       try {
         const data = await api.get('/subscription/plans', token as string);
         if (mounted) setPlans(data || []);
+
+        // Also load current subscription so we can refresh UI when changed
+        const current = await api.get('/subscription/current', token as string).catch(() => null);
+        if (mounted) setCurrentPlan(current?.plan_slug ?? null);
       } catch (err) {
         console.error('Failed to load plans', err);
         if (mounted) setPlans([]);
@@ -40,11 +45,22 @@ export default function Premium() {
       // If backend returned subscription, success
       if (res && (res.subscription || res.message)) {
         Alert.alert('Success', res.message || 'Subscription activated');
-        // Optionally navigate back or refresh
-        router.replace({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any);
       } else {
         Alert.alert('Success', 'Subscription processed');
       }
+
+      // Refresh current subscription so locks unlock immediately
+      let refreshedPlanSlug: string | null = currentPlan;
+      try {
+        const refreshed = await api.get('/subscription/current', token as string);
+        refreshedPlanSlug = refreshed?.plan_slug ?? null;
+        setCurrentPlan(refreshedPlanSlug);
+      } catch (refreshErr) {
+        console.log('Unable to refresh subscription', refreshErr);
+      }
+
+      // Navigate back with the latest plan info
+      router.replace({ pathname: '/components/pages/profile/ProfileDetails', params: { token, refreshed_plan: refreshedPlanSlug } } as any);
     } catch (err: any) {
       console.error('Subscribe error:', err);
       const msg = err?.data?.message || err?.message || 'Failed to subscribe';
@@ -52,6 +68,102 @@ export default function Premium() {
     } finally {
       setSubscribing(false);
     }
+  };
+
+  const renderFreeCard = (isCurrent: boolean) => (
+    <View style={[styles.card, styles.freeCard, isCurrent && styles.currentCard]}>
+      <View style={styles.cardHeaderRow}>
+        <View>
+          <Text style={styles.cardTitle}>FREE</Text>
+          <Text style={styles.cardSubtitle}>This is already unlocked</Text>
+        </View>
+        {isCurrent && <Text style={styles.currentBadge}>Current</Text>}
+      </View>
+
+      <View style={styles.features}>
+        <Feature text="Basic reminders for hydration & medication" />
+        <Feature text="Track up to 2 medications and daily water intake" />
+        <Feature text="Manual logging only" />
+        <Feature text="7-day activity history" />
+      </View>
+
+      <View style={styles.cardFooter}>
+        <Text style={styles.unlockedBadge}>Unlocked</Text>
+      </View>
+    </View>
+  );
+
+  const renderPlusCard = (isCurrent: boolean) => (
+    <View style={[styles.card, styles.plusCard, isCurrent && styles.currentCard]}>
+      <View style={styles.cardHeaderRow}>
+        <Text style={styles.cardTitle}>PLUS+</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {isCurrent && <Text style={styles.currentBadge}>Current</Text>}
+          <Text style={styles.price}>₱89 / month</Text>
+        </View>
+      </View>
+
+      <View style={styles.features}>
+        <Feature text="Everything in Free" />
+        <Feature text="Unlimited reminders" />
+        <Feature text="Track up to 10 medications with dosage schedules" />
+        <Feature text="30-day adherence history" />
+        <Feature text="Basic health stats & charts" />
+        <Feature text="Offline reminders" />
+        <Feature text="Personalized notification" />
+      </View>
+
+      <TouchableOpacity
+        style={[styles.ctaButton, subscribing ? styles.ctaButtonDisabled : null]}
+        disabled={subscribing || isCurrent}
+        onPress={() => handleSubscribe('plus')}
+      >
+        <Text style={styles.ctaText}>{isCurrent ? 'Current Plan' : subscribing ? 'Processing…' : 'Upgrade to PLUS+'}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderPremiumCard = (isCurrent: boolean) => (
+    <View style={[styles.card, styles.premiumCard, isCurrent && styles.currentCard]}>
+      <View style={styles.cardHeaderRow}>
+        <Text style={styles.cardTitle}>PREMIUM</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          {isCurrent && <Text style={styles.currentBadge}>Current</Text>}
+          <Text style={styles.price}>₱149 / month</Text>
+        </View>
+      </View>
+
+      <View style={styles.features}>
+        <Feature text="Everything in PLUS+" />
+        <Feature text="Unlimited medication & hydration tracking" />
+        <Feature text="Data export" />
+        <Feature text="Priority customer support" />
+        <Feature text="Advanced scheduling" />
+        <Feature text="Extended history" />
+        <Feature text="Smart insights & recommendations" />
+      </View>
+
+      <TouchableOpacity
+        style={[styles.ctaButton, styles.premiumCta, subscribing ? styles.ctaButtonDisabled : null]}
+        disabled={subscribing || isCurrent}
+        onPress={() => handleSubscribe('premium')}
+      >
+        <Text style={[styles.ctaText, styles.premiumCtaText]}>{isCurrent ? 'Current Plan' : subscribing ? 'Processing…' : 'Upgrade to PREMIUM'}</Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderPlanCards = () => {
+    const orderedSlugs = ['free', 'plus', 'premium'];
+    const currentSlug = currentPlan || 'free';
+    orderedSlugs.sort((a, b) => (a === currentSlug ? -1 : 0) + (b === currentSlug ? 1 : 0));
+
+    return orderedSlugs.map((slug) => {
+      const isCurrent = currentSlug === slug;
+      if (slug === 'free') return <React.Fragment key={slug}>{renderFreeCard(isCurrent)}</React.Fragment>;
+      if (slug === 'plus') return <React.Fragment key={slug}>{renderPlusCard(isCurrent)}</React.Fragment>;
+      return <React.Fragment key={slug}>{renderPremiumCard(isCurrent)}</React.Fragment>;
+    });
   };
 
   return (
@@ -67,74 +179,7 @@ export default function Premium() {
 
         <Text style={styles.lead}>Choose the plan that's right for you. Upgrade anytime.</Text>
 
-        {/* Free Card (already unlocked) */}
-        <View style={[styles.card, styles.freeCard]}>
-          <View style={styles.cardHeader}>
-            <Text style={styles.cardTitle}>FREE</Text>
-            <Text style={styles.cardSubtitle}>This is already unlocked</Text>
-          </View>
-
-          <View style={styles.features}>
-            <Feature text="Basic reminders for hydration & medication" />
-            <Feature text="Track up to 2 medications and daily water intake" />
-            <Feature text="Manual logging only" />
-            <Feature text="7-day activity history" />
-          </View>
-
-          <View style={styles.cardFooter}>
-            <Text style={styles.unlockedBadge}>Unlocked</Text>
-          </View>
-        </View>
-
-        {/* Plus+ Card */}
-        <View style={[styles.card, styles.plusCard]}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>PLUS+</Text>
-            <Text style={styles.price}>₱89 / month</Text>
-          </View>
-
-          <View style={styles.features}>
-            <Feature text="Everything in Free" />
-            <Feature text="Unlimited reminders" />
-            <Feature text="Track up to 10 medications with dosage schedules" />
-            <Feature text="30-day adherence history" />
-            <Feature text="Basic health stats & charts" />
-            <Feature text="Offline reminders" />
-            <Feature text="Personalized notification" />
-          </View>
-
-          <TouchableOpacity
-            style={styles.ctaButton}
-            onPress={() => router.push({ pathname: '/components/pages/profile/Payment', params: { plan: 'plus', token } } as any)}
-          >
-            <Text style={styles.ctaText}>Upgrade to PLUS+</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Premium Card */}
-        <View style={[styles.card, styles.premiumCard]}>
-          <View style={styles.cardHeaderRow}>
-            <Text style={styles.cardTitle}>PREMIUM</Text>
-            <Text style={styles.price}>₱149 / month</Text>
-          </View>
-
-          <View style={styles.features}>
-            <Feature text="Everything in PLUS+" />
-            <Feature text="Unlimited medication & hydration tracking" />
-            <Feature text="Data export" />
-            <Feature text="Priority customer support" />
-            <Feature text="Advanced scheduling" />
-            <Feature text="Extended history" />
-            <Feature text="Smart insights & recommendations" />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.ctaButton, styles.premiumCta]}
-            onPress={() => router.push({ pathname: '/components/pages/profile/Payment', params: { plan: 'premium', token } } as any)}
-          >
-            <Text style={[styles.ctaText, styles.premiumCtaText]}>Upgrade to PREMIUM</Text>
-          </TouchableOpacity>
-        </View>
+        {renderPlanCards()}
 
         <View style={{ height: 40 }} />
       </ScrollView>
@@ -212,4 +257,15 @@ const styles = StyleSheet.create({
   ctaText: { color: 'white', fontWeight: '700' },
   premiumCta: { backgroundColor: '#111827' },
   premiumCtaText: { color: '#F8FAFC' },
+  ctaButtonDisabled: { opacity: 0.7 },
+  currentCard: { borderWidth: 2, borderColor: '#10B981' },
+  currentBadge: {
+    backgroundColor: '#ECFDF5',
+    color: '#065F46',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    fontWeight: '700',
+    fontSize: 12,
+  },
 });

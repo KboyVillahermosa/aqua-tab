@@ -3,8 +3,12 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { ActivityIndicator, ScrollView, Text, View } from 'react-native';
 import { useInsights } from '../../../hooks/useInsights';
 
-export default function WeeklyInsights() {
-  const { data, loading, error } = useInsights('general');
+interface WeeklyInsightsProps {
+  token: string;
+}
+
+export default function WeeklyInsights({ token }: WeeklyInsightsProps) {
+  const { data, loading, error } = useInsights('general', token);
 
   return (
     <SafeAreaView edges={['top']} style={{ flex: 1, backgroundColor: '#fff' }}>

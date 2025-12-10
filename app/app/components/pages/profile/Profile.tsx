@@ -23,13 +23,6 @@ export default function Profile() {
       action: () => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)
     },
     {
-      id: 2,
-      title: 'Medical History',
-      subtitle: 'View and update medical records',
-      icon: 'medical-outline',
-      action: () => router.push({ pathname: '/components/pages/profile/MedicalHistory', params: { token } } as any)
-    },
-    {
       id: 3,
       title: 'Notifications',
       subtitle: 'Manage notification preferences',
@@ -52,6 +45,13 @@ export default function Profile() {
     },
     {
       id: 6,
+      title: 'Settings',
+      subtitle: 'App preferences and configurations',
+      icon: 'settings-outline',
+      action: () => router.push({ pathname: '/components/pages/settings/Settings', params: { token } } as any)
+    },
+    {
+      id: 7,
       title: 'Help & Support',
       subtitle: 'Get help and contact support',
       icon: 'help-circle-outline',
@@ -100,13 +100,7 @@ export default function Profile() {
       >
         {/* Header */}
         <View style={[styles.header, { paddingTop: (insets.top || 12) }]}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
           <Text style={styles.headerTitle}>Profile</Text>
-          <TouchableOpacity style={styles.editButton}>
-            <Ionicons name="create-outline" size={20} color="#1E3A8A" />
-          </TouchableOpacity>
         </View>
 
         {/* Profile Header */}
@@ -205,41 +199,15 @@ const styles = StyleSheet.create({
   },
   header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-start',
     paddingTop: 20,
     paddingBottom: 24,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '700',
     color: '#1F2937',
-  },
-  editButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
   },
   profileHeader: {
     backgroundColor: 'white',

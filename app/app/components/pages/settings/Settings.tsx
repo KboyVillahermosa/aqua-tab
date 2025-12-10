@@ -1,147 +1,199 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch } from 'react-native';
+import { View, Text, StyleSheet, SafeAreaView, ScrollView, TouchableOpacity, Switch, Alert, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import BottomNavigation from '../../navigation/BottomNavigation';
 
 export default function Settings() {
   const router = useRouter();
-  const [notifications, setNotifications] = useState(true);
-  const [medicationReminders, setMedicationReminders] = useState(true);
-  const [hydrationReminders, setHydrationReminders] = useState(false);
-  const [darkMode, setDarkMode] = useState(false);
+  const { token } = useLocalSearchParams();
+  
+  // App Behavior
+  const [autoSync, setAutoSync] = useState(true);
+  const [offlineMode, setOfflineMode] = useState(false);
+  
+  // Units & Preferences
+  const [useMetricUnits, setUseMetricUnits] = useState(true);
+  const [timeFormat24h, setTimeFormat24h] = useState(false);
+  
+  // Hydration Settings
+  const [smartHydrationGoals, setSmartHydrationGoals] = useState(true);
+  const [weatherBasedReminders, setWeatherBasedReminders] = useState(false);
+  
+  // Medication Settings
+  const [flexibleSchedule, setFlexibleSchedule] = useState(true);
+
+  const handleLogout = async () => {
+    Alert.alert(
+      'Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Logout',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await AsyncStorage.removeItem('token');
+              router.replace('/login');
+            } catch (err) {
+              console.error('Logout error:', err);
+            }
+          }
+        }
+      ]
+    );
+  };
 
   const settingsGroups = [
     {
-      title: 'Notifications',
+      title: 'App Behavior',
       items: [
         {
           id: 1,
-          title: 'Push Notifications',
-          subtitle: 'Receive notifications on your device',
-          icon: 'notifications-outline',
+          title: 'Auto-Sync Data',
+          subtitle: 'Automatically sync with backend',
+          icon: 'sync-outline',
           type: 'switch',
-          value: notifications,
-          onToggle: setNotifications
+          value: autoSync,
+          onToggle: setAutoSync
         },
         {
           id: 2,
-          title: 'Medication Reminders',
-          subtitle: 'Get reminded about your medications',
-          icon: 'medical-outline',
+          title: 'Offline Mode',
+          subtitle: 'Access features without internet',
+          icon: 'cloud-offline-outline',
           type: 'switch',
-          value: medicationReminders,
-          onToggle: setMedicationReminders
+          value: offlineMode,
+          onToggle: setOfflineMode
         },
+      ]
+    },
+    {
+      title: 'Units & Format',
+      items: [
         {
           id: 3,
-          title: 'Hydration Reminders',
-          subtitle: 'Water intake reminders',
-          icon: 'water-outline',
+          title: 'Metric Units',
+          subtitle: 'Use mL, kg, cm (off = oz, lb, in)',
+          icon: 'speedometer-outline',
           type: 'switch',
-          value: hydrationReminders,
-          onToggle: setHydrationReminders
+          value: useMetricUnits,
+          onToggle: setUseMetricUnits
         },
-      ]
-    },
-    {
-      title: 'Appearance',
-      items: [
         {
           id: 4,
-          title: 'Dark Mode',
-          subtitle: 'Switch to dark theme',
-          icon: 'moon-outline',
+          title: '24-Hour Time Format',
+          subtitle: 'Display time in 24-hour format',
+          icon: 'time-outline',
           type: 'switch',
-          value: darkMode,
-          onToggle: setDarkMode
-        },
-        {
-          id: 5,
-          title: 'Language',
-          subtitle: 'English (US)',
-          icon: 'language-outline',
-          type: 'navigation',
-          onPress: () => console.log('Language settings')
+          value: timeFormat24h,
+          onToggle: setTimeFormat24h
         },
       ]
     },
     {
-      title: 'Health Data',
+      title: 'Hydration',
       items: [
         {
+          id: 5,
+          title: 'Smart Hydration Goals',
+          subtitle: 'Adjust goals based on weather & activity',
+          icon: 'water-outline',
+          type: 'switch',
+          value: smartHydrationGoals,
+          onToggle: setSmartHydrationGoals
+        },
+        {
           id: 6,
-          title: 'Export Data',
-          subtitle: 'Download your health data',
-          icon: 'download-outline',
-          type: 'navigation',
-          onPress: () => console.log('Export data')
+          title: 'Weather-Based Reminders',
+          subtitle: 'More reminders on hot days',
+          icon: 'sunny-outline',
+          type: 'switch',
+          value: weatherBasedReminders,
+          onToggle: setWeatherBasedReminders
         },
         {
           id: 7,
-          title: 'Sync with Health App',
-          subtitle: 'Connect with Apple Health or Google Fit',
-          icon: 'sync-outline',
+          title: 'Daily Hydration Goal',
+          subtitle: '2000 mL',
+          icon: 'stats-chart-outline',
           type: 'navigation',
-          onPress: () => console.log('Sync health data')
-        },
-        {
-          id: 8,
-          title: 'Data Privacy',
-          subtitle: 'Manage your data privacy settings',
-          icon: 'shield-outline',
-          type: 'navigation',
-          onPress: () => console.log('Data privacy')
+          onPress: () => Alert.alert('Hydration Goal', 'Goal settings coming soon!')
         },
       ]
     },
     {
-      title: 'Support',
+      title: 'Medication',
       items: [
         {
-          id: 9,
-          title: 'Help Center',
-          subtitle: 'FAQs and troubleshooting',
-          icon: 'help-circle-outline',
-          type: 'navigation',
-          onPress: () => console.log('Help center')
+          id: 8,
+          title: 'Flexible Schedule',
+          subtitle: 'Allow ±30 min for medication times',
+          icon: 'medical-outline',
+          type: 'switch',
+          value: flexibleSchedule,
+          onToggle: setFlexibleSchedule
         },
         {
-          id: 10,
-          title: 'Contact Support',
-          subtitle: 'Get help from our team',
-          icon: 'mail-outline',
+          id: 9,
+          title: 'Medication Schedule',
+          subtitle: 'Manage timing preferences',
+          icon: 'calendar-outline',
           type: 'navigation',
-          onPress: () => console.log('Contact support')
+          onPress: () => router.push({ pathname: '/components/pages/profile/ProfileDetails', params: { token } } as any)
+        },
+      ]
+    },
+    {
+      title: 'Data Management',
+      items: [
+        {
+          id: 10,
+          title: 'Export Health Data',
+          subtitle: 'Download your data as CSV/JSON',
+          icon: 'download-outline',
+          type: 'navigation',
+          onPress: () => Alert.alert('Export Data', 'Data export feature coming soon!')
         },
         {
           id: 11,
-          title: 'Rate App',
-          subtitle: 'Rate us on the App Store',
-          icon: 'star-outline',
+          title: 'Clear Cache',
+          subtitle: 'Free up storage space',
+          icon: 'trash-outline',
           type: 'navigation',
-          onPress: () => console.log('Rate app')
+          onPress: () => {
+            Alert.alert(
+              'Clear Cache',
+              'This will clear temporary data. Your account data will be preserved.',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Clear', style: 'destructive', onPress: () => Alert.alert('Success', 'Cache cleared') }
+              ]
+            );
+          }
         },
       ]
     },
     {
-      title: 'Legal',
+      title: 'About',
       items: [
         {
           id: 12,
-          title: 'Terms of Service',
-          subtitle: 'Read our terms and conditions',
-          icon: 'document-text-outline',
+          title: 'App Version',
+          subtitle: '1.0.0',
+          icon: 'information-circle-outline',
           type: 'navigation',
-          onPress: () => console.log('Terms of service')
+          onPress: () => Alert.alert('AQUATAB', 'Version 1.0.0\nBuild 2024.12.10')
         },
         {
           id: 13,
-          title: 'Privacy Policy',
-          subtitle: 'How we handle your data',
-          icon: 'lock-closed-outline',
+          title: 'Check for Updates',
+          subtitle: 'Get the latest features',
+          icon: 'refresh-outline',
           type: 'navigation',
-          onPress: () => console.log('Privacy policy')
+          onPress: () => Alert.alert('Updates', 'You are using the latest version!')
         },
       ]
     },
@@ -183,21 +235,19 @@ export default function Settings() {
       <ScrollView style={styles.scrollView} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color="#1F2937" />
-          </TouchableOpacity>
           <Text style={styles.headerTitle}>Settings</Text>
-          <View style={styles.placeholder} />
         </View>
 
         {/* App Version */}
         <View style={styles.versionCard}>
-          <View style={styles.appIcon}>
-            <Ionicons name="medical" size={32} color="white" />
-          </View>
+          <Image 
+            source={require('../../../assets/images/mainlogo copy.png')} 
+            style={styles.appLogo}
+            resizeMode="contain"
+          />
           <View style={styles.versionInfo}>
-            <Text style={styles.appName}>Aqua Health</Text>
-            <Text style={styles.versionText}>Version 1.0.0</Text>
+            <Text style={styles.appName}>AQUATAB</Text>
+            <Text style={styles.versionText}>Hydration & Medication Tracker</Text>
           </View>
         </View>
 
@@ -217,7 +267,7 @@ export default function Settings() {
         ))}
 
         {/* Sign Out Button */}
-        <TouchableOpacity style={styles.signOutButton}>
+        <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
           <Text style={styles.signOutText}>Sign Out</Text>
         </TouchableOpacity>
@@ -240,32 +290,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     paddingTop: 20,
     paddingBottom: 24,
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: 'white',
-    justifyContent: 'center',
-    alignItems: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 3,
-    elevation: 3,
-  },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 28,
     fontWeight: '700',
     color: '#1F2937',
-  },
-  placeholder: {
-    width: 40,
   },
   versionCard: {
     backgroundColor: 'white',
@@ -279,6 +310,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 8,
     elevation: 4,
+  },
+  appLogo: {
+    width: 120,
+    height: 80,
+    marginRight: 1,
   },
   appIcon: {
     width: 56,

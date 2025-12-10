@@ -111,6 +111,12 @@ export default function Hydration() {
   const { pulse: pulseButton } = usePulseAnimation();
   const bounceAnimation = useBounceAnimation();
 
+  // FIX: Session-based refs to prevent repeated modals in a single session
+  // These refs track if a modal has already been shown since the app launched
+  // They reset when the app is closed, but persist while the app is open
+  const goalReachedShownRef = useRef(false);
+  const overhydrationShownRef = useRef(false);
+
   const fmt = (n:number) => {
     try { return n.toLocaleString(); } catch { return String(n); }
   };
@@ -379,23 +385,27 @@ export default function Hydration() {
     // Trigger pulse animation
     pulseButton();
     
-    // FIX #1 & #2: Check if goal reached (only show modal once per day)
+    // FIX: Check if goal reached (only show modal once per session)
+    // Uses ref to prevent repeated modals when user adds more water after crossing 100% threshold
     const justReachedGoal = newTotal >= goal && oldTotal < goal;
-    if (justReachedGoal && !goalReachedToday) {
+    if (justReachedGoal && !goalReachedShownRef.current) {
       triggerCelebration();
       setShowGoalReachedModal(true);
-      setGoalReachedToday(true); // Mark as reached today
+      goalReachedShownRef.current = true; // Mark as shown this session
+      setGoalReachedToday(true); // Also mark for backend tracking
       
       // Show goal completion notification
       notificationManager.showGoalCompletionAlert('hydration', goal);
     }
     
-    // Check for overhydration (>150% of goal) - only show once per day
+    // Check for overhydration (>150% of goal) - only show modal once per session
+    // Uses ref to prevent repeated warnings when user continues drinking after 150% threshold
     const currentPercentage = (newTotal / goal) * 100;
     const justExceeded150 = currentPercentage > 150 && (oldTotal / goal) * 100 <= 150;
-    if (justExceeded150 && !overhydrationShownToday) {
+    if (justExceeded150 && !overhydrationShownRef.current) {
       setShowOverhydrationModal(true);
-      setOverhydrationShownToday(true);
+      overhydrationShownRef.current = true; // Mark as shown this session
+      setOverhydrationShownToday(true); // Also mark for backend tracking
     }
     
     // Check if behind on hydration pace (only if not yet reached goal)

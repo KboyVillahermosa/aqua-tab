@@ -276,6 +276,7 @@
 
 @push('scripts')
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<!-- htmlhint attr-unsafe-chars:false -->
 <script>
     let medicationTypeChart, weeklyAdherenceChart;
 

@@ -1,8 +1,10 @@
-import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal } from 'react-native';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, TouchableOpacity, ActivityIndicator, Alert, StyleSheet, ScrollView, TextInput, SafeAreaView, Dimensions, Modal, LayoutAnimation, Platform, UIManager } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import Toast from 'react-native-toast-message';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as api from './api';
 import BottomNavigation from './components/navigation/BottomNavigation';
 import PremiumLockModal from './components/PremiumLockModal';
@@ -23,6 +25,8 @@ interface TimelineItem {
 interface QuickStatus {
   medicationsLeft: number;
   hydrationPercentage: number;
+  medicationsTaken: number;
+  medicationsTotal: number;
 }
 
 export default function Home() {
@@ -32,11 +36,18 @@ export default function Home() {
   const [user, setUser] = useState<any>(null);
   const [timeline, setTimeline] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
-  const [quickStatus, setQuickStatus] = useState<QuickStatus>({ medicationsLeft: 0, hydrationPercentage: 0 });
+  const [quickStatus, setQuickStatus] = useState<QuickStatus>({ 
+    medicationsLeft: 0, 
+    hydrationPercentage: 0,
+    medicationsTaken: 0,
+    medicationsTotal: 0
+  });
   const [menuVisible, setMenuVisible] = useState(false);
   const [subscription, setSubscription] = useState<any>(null);
   const [premiumPopupVisible, setPremiumPopupVisible] = useState(false);
   const [premiumLockVisible, setPremiumLockVisible] = useState(false);
+  const [premiumCongratsVisible, setPremiumCongratsVisible] = useState(false);
+  const [weeklyReportExpanded, setWeeklyReportExpanded] = useState(false);
   const [weeklyReport, setWeeklyReport] = useState<any>(null);
   const [patterns, setPatterns] = useState<any[]>([]);
   const [snoozeSuggestions, setSnoozeSuggestions] = useState<any[]>([]);
@@ -46,6 +57,14 @@ export default function Home() {
   const [showGoalCompletionModal, setShowGoalCompletionModal] = useState(false);
   const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
+  const premiumCongratsShownRef = useRef(false);
+
+  // Enable layout animation on Android for smooth collapses
+  useEffect(() => {
+    if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+      UIManager.setLayoutAnimationEnabledExperimental(true);
+    }
+  }, []);
 
   // Debounce medicine search
   useEffect(() => {
@@ -134,6 +153,20 @@ export default function Home() {
           // For other errors, continue to show UI with default data
         }
         
+        const refreshSubscription = async () => {
+          try {
+            const subscriptionData: any = await Promise.race([
+              api.get('/subscription/current', token as string, 3000),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
+            ]);
+            setSubscription(subscriptionData);
+          } catch (subErr) {
+            console.log('Error loading subscription (non-critical):', subErr);
+            // Keep previous subscription value to avoid locking premium by mistake
+            setSubscription((prev: any) => prev || { plan_slug: 'free', is_active: false });
+          }
+        };
+
         // Load other data in background (non-blocking, won't affect loading state)
         // These run after loading is already set to false
         setTimeout(() => {
@@ -141,20 +174,31 @@ export default function Home() {
           Promise.allSettled([
             api.get('/hydration', token as string, 3000).catch(() => null),
             api.get('/medications/upcoming', token as string, 3000).catch(() => null),
+            api.get('/medications/stats', token as string, 3000).catch(() => null),
           ]).then((results) => {
             const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
             const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
+            const stats = results[2].status === 'fulfilled' ? results[2].value : null;
             
             const hydrationPercentage = hydrationData ? Math.round(hydrationData?.percentage || 0) : 0;
             const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
+            const medicationsTaken = stats?.completed_today || 0;
+            const medicationsTotal = stats?.total_reminders_today || 0;
             
             setQuickStatus({
               medicationsLeft,
-              hydrationPercentage
+              hydrationPercentage,
+              medicationsTaken,
+              medicationsTotal
             });
           }).catch(() => {
             // Set defaults if all fail
-            setQuickStatus({ medicationsLeft: 0, hydrationPercentage: 0 });
+            setQuickStatus({ 
+              medicationsLeft: 0, 
+              hydrationPercentage: 0,
+              medicationsTaken: 0,
+              medicationsTotal: 0
+            });
           });
           
           // Load timeline separately to avoid blocking on errors
@@ -171,18 +215,7 @@ export default function Home() {
             });
 
           // Load subscription status (non-blocking, with timeout)
-          Promise.race([
-            api.get('/subscription/current', token as string, 3000), // 3 second timeout
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 3000))
-          ])
-            .then((subscriptionData: any) => {
-              setSubscription(subscriptionData);
-            })
-            .catch((subErr) => {
-              console.log('Error loading subscription (non-critical):', subErr);
-              // Set default subscription to avoid blocking
-              setSubscription({ plan_slug: 'free', is_active: false });
-            });
+          refreshSubscription();
         }, 100); // Small delay to ensure loading is set to false first
       } catch (err: any) {
         console.log('Home load error:', err);
@@ -236,7 +269,27 @@ export default function Home() {
       setPatterns([]);
       setSnoozeSuggestions([]);
     }
-  }, [subscription, token]);
+  }, [subscription?.plan_slug, token]);
+
+  // One-time premium congratulations popup when user becomes premium (persistent with AsyncStorage)
+  useEffect(() => {
+    const checkAndShowPremiumPopup = async () => {
+      if (subscription?.plan_slug === 'premium' && !premiumCongratsShownRef.current) {
+        try {
+          const hasSeenPopup = await AsyncStorage.getItem('hasSeenPremiumPopup');
+          if (!hasSeenPopup) {
+            premiumCongratsShownRef.current = true;
+            setPremiumCongratsVisible(true);
+            // Mark as seen
+            await AsyncStorage.setItem('hasSeenPremiumPopup', 'true');
+          }
+        } catch (err) {
+          console.log('Error checking premium popup flag:', err);
+        }
+      }
+    };
+    checkAndShowPremiumPopup();
+  }, [subscription?.plan_slug]);
 
   // Real-time hydration data refresh when screen comes into focus
   useFocusEffect(
@@ -245,23 +298,37 @@ export default function Home() {
 
       const refreshHydrationData = async () => {
         try {
-          const hydrationRes = await api.get('/hydration', token as string, 3000).catch(() => null);
+          const [hydrationRes, statsRes, subscriptionRes] = await Promise.all([
+            api.get('/hydration', token as string, 3000).catch(() => null),
+            api.get('/medications/stats', token as string, 3000).catch(() => null),
+            api.get('/subscription/current', token as string, 3000).catch(() => null),
+          ]);
+          
           if (hydrationRes) {
-            const todayTotal = (hydrationRes.entries ?? []).filter((e: any) => {
-              const entryDate = new Date(e.timestamp).toDateString();
-              const today = new Date().toDateString();
-              return entryDate === today;
-            }).reduce((sum: number, e: any) => sum + e.amount_ml, 0);
-            
-            const hydrationPercentage = Math.round((todayTotal / (hydrationRes.goal || 2000)) * 100);
+            const hydrationPercentage = Math.round(hydrationRes.percentage || 0);
             
             setQuickStatus(prev => ({
               ...prev,
               hydrationPercentage
             }));
           }
+          
+          if (statsRes) {
+            const medicationsTaken = statsRes.completed_today || 0;
+            const medicationsTotal = statsRes.total_reminders_today || 0;
+            
+            setQuickStatus(prev => ({
+              ...prev,
+              medicationsTaken,
+              medicationsTotal
+            }));
+          }
+
+          if (subscriptionRes) {
+            setSubscription(subscriptionRes);
+          }
         } catch (err) {
-          console.log('Hydration refresh error', err);
+          console.log('Data refresh error', err);
         }
       };
       
@@ -278,20 +345,26 @@ export default function Home() {
         const results = await Promise.allSettled([
           api.get('/hydration', token as string, 3000).catch(() => null),
           api.get('/medications/upcoming', token as string, 3000).catch(() => null),
+          api.get('/medications/stats', token as string, 3000).catch(() => null),
         ]);
         
         const hydrationData = results[0].status === 'fulfilled' ? results[0].value : null;
         const upcoming = results[1].status === 'fulfilled' ? results[1].value : null;
+        const stats = results[2].status === 'fulfilled' ? results[2].value : null;
         
         const hydrationPercentage = hydrationData ? Math.round(hydrationData?.percentage || 0) : 0;
         const medicationsLeft = Array.isArray(upcoming) ? upcoming.length : 0;
+        const medicationsTaken = stats?.completed_today || 0;
+        const medicationsTotal = stats?.total_reminders_today || 0;
         
         setQuickStatus({
           medicationsLeft,
-          hydrationPercentage
+          hydrationPercentage,
+          medicationsTaken,
+          medicationsTotal
         });
         
-        console.log('Real-time update: Hydration', hydrationPercentage + '%', 'Medications left:', medicationsLeft);
+        console.log('Real-time update: Hydration', hydrationPercentage + '%', 'Medications:', medicationsTaken + '/' + medicationsTotal);
       } catch (error) {
         console.log('Error refreshing quick status:', error);
       }
@@ -486,43 +559,47 @@ export default function Home() {
           {/* Weekly Report Card - Premium Feature */}
           {subscription?.plan_slug === 'premium' && weeklyReport && (
             <View style={styles.weeklyReportCard}>
-            <View style={styles.weeklyReportHeader}>
-              <Ionicons name="analytics" size={24} color="#1E3A8A" />
-              <Text style={styles.weeklyReportTitle}>Weekly Report Card</Text>
-            </View>
-            <View style={styles.weeklyReportContent}>
-              <View style={styles.weeklyReportItem}>
-                <Text style={styles.weeklyReportLabel}>Hydration</Text>
-                <Text style={styles.weeklyReportValue}>{weeklyReport.hydration?.percentage || 0}%</Text>
-                <Text style={styles.weeklyReportMessage}>{weeklyReport.hydration?.message || ''}</Text>
-              </View>
-              <View style={styles.weeklyReportDivider} />
-              <View style={styles.weeklyReportItem}>
-                <Text style={styles.weeklyReportLabel}>Medications</Text>
-                <Text style={styles.weeklyReportValue}>{weeklyReport.medications?.adherence_rate || 0}%</Text>
-                <Text style={styles.weeklyReportMessage}>{weeklyReport.medications?.message || ''}</Text>
-              </View>
-            </View>
-            <View style={styles.weeklyReportScore}>
-              <Text style={styles.weeklyReportScoreLabel}>Overall Score</Text>
-              <Text style={styles.weeklyReportScoreValue}>{weeklyReport.overall_score || 0}%</Text>
-            </View>
-            </View>
-          )}
+              <TouchableOpacity
+                activeOpacity={0.8}
+                style={styles.weeklyReportHeader}
+                onPress={() => {
+                  LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+                  setWeeklyReportExpanded((prev) => !prev);
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Ionicons name="analytics" size={24} color="#1E3A8A" />
+                  <Text style={styles.weeklyReportTitle}>Weekly Report Card</Text>
+                </View>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  <Text style={styles.weeklyReportSummary}>Overall {weeklyReport.overall_score || 0}%</Text>
+                  <Ionicons
+                    name={weeklyReportExpanded ? 'chevron-up' : 'chevron-down'}
+                    size={22}
+                    color="#1E3A8A"
+                  />
+                </View>
+              </TouchableOpacity>
 
-          {/* Pattern Detection - Premium Feature */}
-          {subscription?.plan_slug === 'premium' && patterns.length > 0 && (
-            <View style={styles.patternsCard}>
-            <View style={styles.patternsHeader}>
-              <Ionicons name="bulb" size={24} color="#F59E0B" />
-              <Text style={styles.patternsTitle}>Smart Insights</Text>
-            </View>
-            {patterns.slice(0, 3).map((pattern, index) => (
-              <View key={index} style={styles.patternItem}>
-                <Ionicons name="information-circle" size={20} color="#3B82F6" />
-                <Text style={styles.patternText}>{pattern.pattern}</Text>
-              </View>
-            ))}
+              {weeklyReportExpanded && (
+                <View style={styles.weeklyReportContent}>
+                  <View style={styles.weeklyReportItem}>
+                    <Text style={styles.weeklyReportLabel}>Hydration</Text>
+                    <Text style={styles.weeklyReportValue}>{weeklyReport.hydration?.percentage || 0}%</Text>
+                    <Text style={styles.weeklyReportMessage}>{weeklyReport.hydration?.message || ''}</Text>
+                  </View>
+                  <View style={styles.weeklyReportDivider} />
+                  <View style={styles.weeklyReportItem}>
+                    <Text style={styles.weeklyReportLabel}>Medications</Text>
+                    <Text style={styles.weeklyReportValue}>{weeklyReport.medications?.adherence_rate || 0}%</Text>
+                    <Text style={styles.weeklyReportMessage}>{weeklyReport.medications?.message || ''}</Text>
+                  </View>
+                  <View style={styles.weeklyReportScore}>
+                    <Text style={styles.weeklyReportScoreLabel}>Overall Score</Text>
+                    <Text style={styles.weeklyReportScoreValue}>{weeklyReport.overall_score || 0}%</Text>
+                  </View>
+                </View>
+              )}
             </View>
           )}
 
@@ -583,7 +660,49 @@ export default function Home() {
             <View style={styles.progressBarContainer}>
               <View style={[styles.progressBar, { width: `${Math.min(quickStatus.hydrationPercentage, 100)}%` }]} />
             </View>
-            <TouchableOpacity style={styles.quickActionButton} activeOpacity={0.8}>
+            <TouchableOpacity 
+              style={styles.quickActionButton} 
+              activeOpacity={0.8}
+              onPress={async (e) => {
+                e.stopPropagation();
+                try {
+                  // Log 250ml to hydration
+                  await api.post('/hydration', { amount_ml: 250, source: 'quick' }, token as string);
+                  
+                  // Refresh hydration data immediately
+                  const hydrationRes = await api.get('/hydration', token as string);
+                  if (hydrationRes) {
+                    const hydrationPercentage = Math.round(hydrationRes.percentage || 0);
+                    const todayTotal = hydrationRes.today_total || 0;
+                    const goal = hydrationRes.goal || 2000;
+                    
+                    setQuickStatus(prev => ({
+                      ...prev,
+                      hydrationPercentage
+                    }));
+                    
+                    Toast.show({
+                      type: 'success',
+                      text1: '💧 Water Logged!',
+                      text2: `+250ml • Total: ${todayTotal}ml / ${goal}ml (${hydrationPercentage}%)`,
+                      position: 'top',
+                      visibilityTime: 3000,
+                      topOffset: 60,
+                    });
+                  }
+                } catch (err) {
+                  console.log('Error logging hydration:', err);
+                  Toast.show({
+                    type: 'error',
+                    text1: '❌ Logging Failed',
+                    text2: 'Failed to log hydration. Please try again.',
+                    position: 'top',
+                    visibilityTime: 3000,
+                    topOffset: 60,
+                  });
+                }
+              }}
+            >
               <Ionicons name="add" size={20} color="white" />
               <Text style={styles.quickActionText}>Log +250ml</Text>
             </TouchableOpacity>
@@ -599,17 +718,27 @@ export default function Home() {
               <View>
                 <Text style={styles.summaryCardTitle}>Medications</Text>
                 <Text style={styles.summaryCardSubtitle}>
-                  {quickStatus.medicationsLeft === 0 ? 'No more meds today!' : `${quickStatus.medicationsLeft} remaining today`}
+                  {quickStatus.medicationsTotal === 0 
+                    ? 'No medications scheduled' 
+                    : `${quickStatus.medicationsTaken} of ${quickStatus.medicationsTotal} taken`}
                 </Text>
               </View>
               <Ionicons name="medkit" size={32} color="#EF4444" />
             </View>
             <View style={styles.progressBarContainer}>
-              <View style={[styles.progressBar, { width: '65%', backgroundColor: '#EF4444' }]} />
+              <View style={[
+                styles.progressBar, 
+                { 
+                  width: quickStatus.medicationsTotal > 0 
+                    ? `${Math.round((quickStatus.medicationsTaken / quickStatus.medicationsTotal) * 100)}%` 
+                    : '0%', 
+                  backgroundColor: '#EF4444' 
+                }
+              ]} />
             </View>
             {quickStatus.medicationsLeft > 0 && (
               <Text style={styles.nextMedicationText}>
-                {timeline.find(t => t.type === 'medication' && t.status === 'upcoming')?.title || 'Check timeline for details'}
+                {quickStatus.medicationsLeft === 1 ? '1 medication remaining' : `${quickStatus.medicationsLeft} medications remaining`}
               </Text>
             )}
           </TouchableOpacity>
@@ -744,6 +873,26 @@ export default function Home() {
                 <Text style={styles.premiumPopupCloseText}>Maybe Later</Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+      {/* Premium Congratulations Modal */}
+      <Modal
+        visible={premiumCongratsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPremiumCongratsVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.premiumCongratsContent}>
+            <Ionicons name="star" size={40} color="#F59E0B" />
+            <Text style={styles.premiumCongratsTitle}>Welcome to Premium!</Text>
+            <Text style={styles.premiumCongratsBody}>
+              You now have full access to all premium features. Enjoy smarter insights, unlimited tracking, and priority support.
+            </Text>
+            <TouchableOpacity style={styles.premiumCongratsButton} onPress={() => setPremiumCongratsVisible(false)}>
+              <Text style={styles.premiumCongratsButtonText}>Awesome</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1370,13 +1519,53 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '500',
   },
+  weeklyReportSummary: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#1E3A8A',
+  },
+  premiumCongratsContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+  },
+  premiumCongratsTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 12,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  premiumCongratsBody: {
+    fontSize: 15,
+    color: '#4B5563',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  premiumCongratsButton: {
+    backgroundColor: '#1E3A8A',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    width: '100%',
+  },
+  premiumCongratsButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+  },
   // Weekly Report Card Styles
   weeklyReportCard: {
     backgroundColor: 'white',
     borderRadius: 16,
     padding: 20,
-    marginHorizontal: 20,
-    marginBottom: 20,
+    marginBottom: 16,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -1388,16 +1577,17 @@ const styles = StyleSheet.create({
   weeklyReportHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 16,
+    justifyContent: 'space-between',
+    paddingBottom: 12,
   },
   weeklyReportTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#1F2937',
-    marginLeft: 12,
+    marginLeft: 8,
   },
   weeklyReportContent: {
-    marginBottom: 16,
+    paddingTop: 12,
   },
   weeklyReportItem: {
     marginBottom: 12,
@@ -1428,6 +1618,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
+    marginTop: 12,
   },
   weeklyReportScoreLabel: {
     fontSize: 12,

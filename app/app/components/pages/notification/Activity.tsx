@@ -1,9 +1,8 @@
 /**
- * Activity Tab (formerly Notifications)
- * ====================================
- * Displays notification history and activity feed
- * Shows: Completed, Upcoming, Missed notifications
- * Actions: Complete, Snooze, Delete
+ * Activity Tab - Advanced Analytics & History
+ * ==========================================
+ * Displays comprehensive medication/notification history with analytics
+ * Features: Real stats, PDF export, adherence trends, premium charts
  * 
  * Note: All notification SETTINGS are now in Profile > Notifications Settings
  */
@@ -18,16 +17,20 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import Ionicons from '@expo/vector-icons/Ionicons';
-import { useLocalSearchParams } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
 
 import BottomNavigation from '../../navigation/BottomNavigation';
+import PremiumLockModal from '../../PremiumLockModal';
 import api from '../../../api';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Types
-export type NotificationStatus = 'upcoming' | 'completed' | 'missed' | 'snoozed' | 'delivered' | 'scheduled';
+export type NotificationStatus = 'upcoming' | 'completed' | 'missed' | 'snoozed' | 'delivered' | 'scheduled' | 'taken' | 'skipped';
 export type NotificationType = 'hydration' | 'medication' | 'general';
 
 export interface NotificationItem {
@@ -40,6 +43,8 @@ export interface NotificationItem {
   scheduled_at?: string | null;
   scheduled_time?: string | null;
   created_at?: string | null;
+  medication_name?: string;
+  time?: string;
 }
 
 export interface NotificationStats {
@@ -48,6 +53,48 @@ export interface NotificationStats {
   missed: number;
 }
 
+export interface MedicationHistory {
+  id: number;
+  medication_id: number;
+  user_id: number;
+  status: 'completed' | 'skipped' | 'taken' | 'missed';
+  time: string;
+  scheduled_time?: string;
+  taken_time?: string;
+  created_at: string;
+  medication?: {
+    id: number;
+    name: string;
+    dosage?: string;
+    icon?: string;
+  };
+}
+
+export interface AdherenceTrend {
+  date: string;
+  completed: number;
+  total: number;
+  percentage: number;
+}
+
+// PillIcon Component (inline since we don't have it as a separate file)
+const PillIcon = ({ name, size = 20, color = '#1E3A8A' }: { name: string; size?: number; color?: string }) => {
+  const iconMap: Record<string, any> = {
+    pill: 'medkit',
+    tablet: 'fitness',
+    capsule: 'ellipse',
+    liquid: 'water',
+    injection: 'bandage',
+    inhaler: 'cloud',
+    drops: 'water-outline',
+    cream: 'hand-left',
+    default: 'medical',
+  };
+  
+  const iconName = iconMap[name?.toLowerCase()] || iconMap.default;
+  return <Ionicons name={iconName} size={size} color={color} />;
+};
+
 export default function Activity() {
   const params = useLocalSearchParams();
   const token = (params?.token as string) || undefined;
@@ -55,20 +102,30 @@ export default function Activity() {
 
   // State
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [medicationHistory, setMedicationHistory] = useState<MedicationHistory[]>([]);
   const [stats, setStats] = useState<NotificationStats>({ completed: 0, upcoming: 0, missed: 0 });
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [subscription, setSubscription] = useState<any>(null);
+  const [showPremiumModal, setShowPremiumModal] = useState<boolean>(false);
+  const [adherencePeriod, setAdherencePeriod] = useState<'7' | '30'>('7');
+  const [adherenceTrends, setAdherenceTrends] = useState<AdherenceTrend[]>([]);
+  const [exporting, setExporting] = useState<boolean>(false);
 
   // Helper: Get status color
   const getStatusColor = useCallback((status: NotificationStatus) => {
     switch (status) {
       case 'completed':
+      case 'taken':
         return '#10B981';
       case 'missed':
+      case 'skipped':
         return '#EF4444';
       case 'snoozed':
         return '#F59E0B';
       case 'delivered':
+      case 'scheduled':
+      case 'upcoming':
         return '#3B82F6';
       default:
         return '#3B82F6';
@@ -85,14 +142,17 @@ export default function Activity() {
   const getStatusText = useCallback((status: NotificationStatus) => {
     switch (status) {
       case 'completed':
+      case 'taken':
         return 'Completed';
       case 'missed':
+      case 'skipped':
         return 'Missed';
       case 'snoozed':
         return 'Snoozed';
       case 'delivered':
         return 'Delivered';
       case 'scheduled':
+      case 'upcoming':
         return 'Upcoming';
       default:
         return 'Upcoming';
@@ -145,18 +205,37 @@ export default function Activity() {
       seen.add(id);
       unique.push({
         id,
-        title: raw?.title ?? 'Notification',
+        title: raw?.title ?? raw?.medication?.name ?? 'Notification',
         message: raw?.message ?? raw?.body ?? '',
         body: raw?.body,
         type: (raw?.type ?? 'general') as NotificationType,
         status: (raw?.status ?? 'scheduled') as NotificationStatus,
         scheduled_at: raw?.scheduled_at ?? null,
-        scheduled_time: raw?.scheduled_time ?? null,
+        scheduled_time: raw?.scheduled_time ?? raw?.time ?? null,
         created_at: raw?.created_at ?? null,
+        medication_name: raw?.medication?.name,
+        time: raw?.time,
       });
     }
 
     return unique;
+  }, []);
+
+  // Normalize medication history from API
+  const normalizeMedicationHistory = useCallback((payload: any): MedicationHistory[] => {
+    const arr = Array.isArray(payload) ? payload : payload?.data;
+    if (!Array.isArray(arr)) return [];
+    return arr.map((item: any) => ({
+      id: item.id,
+      medication_id: item.medication_id,
+      user_id: item.user_id,
+      status: item.status,
+      time: item.time,
+      scheduled_time: item.scheduled_time,
+      taken_time: item.taken_time,
+      created_at: item.created_at,
+      medication: item.medication,
+    }));
   }, []);
 
   // Normalize stats response
@@ -164,9 +243,9 @@ export default function Activity() {
     const s = payload?.data ?? payload ?? {};
     const upcoming = Number(s?.upcoming ?? s?.scheduled ?? 0) || 0;
     return {
-      completed: Number(s?.completed ?? 0) || 0,
+      completed: Number(s?.completed ?? s?.taken ?? 0) || 0,
       upcoming,
-      missed: Number(s?.missed ?? 0) || 0,
+      missed: Number(s?.missed ?? s?.skipped ?? 0) || 0,
     };
   }, []);
 
@@ -181,26 +260,134 @@ export default function Activity() {
     }
   }, [normalizeList, token]);
 
-  // Fetch stats from API
+  // Fetch medication history from all medications
+  const fetchMedicationHistory = useCallback(async () => {
+    if (!token) return;
+    try {
+      // Get all medications first
+      const medications: any[] = await api.get('/medications', token);
+      
+      // Fetch history for each medication
+      const historyPromises = medications.map(async (med) => {
+        try {
+          const history = await api.get(`/medications/${med.id}/history`, token);
+          // Attach medication info to each history entry
+          return Array.isArray(history) ? history.map((h: any) => ({
+            ...h,
+            medication: {
+              id: med.id,
+              name: med.name,
+              dosage: med.dosage,
+              icon: med.icon,
+            },
+          })) : [];
+        } catch {
+          return [];
+        }
+      });
+
+      const allHistory = (await Promise.all(historyPromises)).flat();
+      const normalized = normalizeMedicationHistory(allHistory);
+      setMedicationHistory(normalized);
+
+      // Calculate real stats from medication history
+      const today = new Date().toISOString().split('T')[0];
+      const todayHistory = normalized.filter(h => h.time?.startsWith(today));
+      
+      const completed = todayHistory.filter(h => h.status === 'completed' || h.status === 'taken').length;
+      const missed = todayHistory.filter(h => h.status === 'missed' || h.status === 'skipped').length;
+      
+      // Get upcoming from medications with scheduled times
+      const upcoming = medications.filter(m => {
+        const times = m.times || [];
+        return times.some((t: string) => {
+          const scheduledTime = new Date(`${today}T${t}`);
+          return scheduledTime > new Date();
+        });
+      }).length;
+
+      setStats({ completed, upcoming, missed });
+    } catch (error) {
+      console.error('Error fetching medication history:', error);
+      setMedicationHistory([]);
+    }
+  }, [token, normalizeMedicationHistory]);
+
+  // Fetch subscription status
+  const fetchSubscription = useCallback(async () => {
+    if (!token) return;
+    try {
+      const sub = await api.get('/subscription/current', token, 3000);
+      setSubscription(sub || { plan_slug: 'free', is_active: false });
+    } catch {
+      setSubscription({ plan_slug: 'free', is_active: false });
+    }
+  }, [token]);
+
+  // Calculate adherence trends
+  const calculateAdherenceTrends = useCallback(() => {
+    const days = adherencePeriod === '7' ? 7 : 30;
+    const trends: AdherenceTrend[] = [];
+    
+    for (let i = days - 1; i >= 0; i--) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const dateStr = date.toISOString().split('T')[0];
+      
+      const dayHistory = medicationHistory.filter(h => h.time?.startsWith(dateStr));
+      const completed = dayHistory.filter(h => h.status === 'completed' || h.status === 'taken').length;
+      const total = dayHistory.length;
+      const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+      
+      trends.push({
+        date: dateStr,
+        completed,
+        total,
+        percentage,
+      });
+    }
+    
+    setAdherenceTrends(trends);
+  }, [medicationHistory, adherencePeriod]);
+
+  // Fetch stats from API (fallback)
   const fetchStats = useCallback(async () => {
     try {
       const res = await api.get('/notifications/stats', token);
-      setStats(normalizeStats(res));
+      const apiStats = normalizeStats(res);
+      // Only use if we don't have medication history stats
+      if (medicationHistory.length === 0) {
+        setStats(apiStats);
+      }
     } catch (_) {
-      setStats({ completed: 0, upcoming: 0, missed: 0 });
+      // Stats already calculated from medication history
     }
-  }, [normalizeStats, token]);
+  }, [normalizeStats, token, medicationHistory.length]);
 
-  // Initial load on mount
-  const initialLoad = useCallback(async () => {
-    setLoading(true);
-    await Promise.all([fetchNotifications(), fetchStats()]);
-    setLoading(false);
-  }, [fetchNotifications, fetchStats]);
+  // Initial load on mount - replaced with useFocusEffect
+  useFocusEffect(
+    useCallback(() => {
+      const loadData = async () => {
+        setLoading(true);
+        await Promise.all([
+          fetchNotifications(),
+          fetchMedicationHistory(),
+          fetchSubscription(),
+          fetchStats(),
+        ]);
+        setLoading(false);
+      };
+      
+      loadData();
+    }, [fetchNotifications, fetchMedicationHistory, fetchSubscription, fetchStats])
+  );
 
+  // Calculate adherence trends when medication history changes
   useEffect(() => {
-    initialLoad();
-  }, [initialLoad]);
+    if (medicationHistory.length > 0) {
+      calculateAdherenceTrends();
+    }
+  }, [medicationHistory, adherencePeriod, calculateAdherenceTrends]);
 
   // Mark all as read
   const markAllAsRead = useCallback(async () => {
@@ -273,9 +460,147 @@ export default function Activity() {
   // Handle refresh
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await Promise.all([fetchNotifications(), fetchStats()]);
+    await Promise.all([
+      fetchNotifications(),
+      fetchMedicationHistory(),
+      fetchSubscription(),
+      fetchStats(),
+    ]);
     setRefreshing(false);
-  }, [fetchNotifications, fetchStats]);
+  }, [fetchNotifications, fetchMedicationHistory, fetchSubscription, fetchStats]);
+
+  // Export to PDF
+  const exportToPDF = useCallback(async () => {
+    if (exporting) return;
+    
+    setExporting(true);
+    try {
+      // Get last 30 entries from medication history
+      const recentHistory = medicationHistory
+        .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+        .slice(0, 30);
+
+      if (recentHistory.length === 0) {
+        Alert.alert('No Data', 'No medication history available to export.');
+        setExporting(false);
+        return;
+      }
+
+      // Generate HTML for PDF
+      const html = `
+        <!DOCTYPE html>
+        <html>
+        <head>
+          <meta charset="utf-8">
+          <title>Medication History Report</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              padding: 20px;
+              color: #1F2937;
+            }
+            h1 {
+              color: #1E3A8A;
+              border-bottom: 3px solid #1E3A8A;
+              padding-bottom: 10px;
+            }
+            table {
+              width: 100%;
+              border-collapse: collapse;
+              margin-top: 20px;
+            }
+            th {
+              background-color: #1E3A8A;
+              color: white;
+              padding: 12px;
+              text-align: left;
+              font-weight: bold;
+            }
+            td {
+              padding: 10px;
+              border-bottom: 1px solid #E5E7EB;
+            }
+            tr:nth-child(even) {
+              background-color: #F9FAFB;
+            }
+            .completed {
+              color: #10B981;
+              font-weight: bold;
+            }
+            .missed {
+              color: #EF4444;
+              font-weight: bold;
+            }
+            .footer {
+              margin-top: 30px;
+              text-align: center;
+              color: #6B7280;
+              font-size: 12px;
+            }
+          </style>
+        </head>
+        <body>
+          <h1>Medication History Report</h1>
+          <p><strong>Generated:</strong> ${new Date().toLocaleString()}</p>
+          <p><strong>Period:</strong> Last 30 entries</p>
+          
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Time</th>
+                <th>Medication</th>
+                <th>Dosage</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${recentHistory.map(entry => {
+                const date = new Date(entry.time);
+                const dateStr = date.toLocaleDateString();
+                const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                const statusClass = (entry.status === 'completed' || entry.status === 'taken') ? 'completed' : 'missed';
+                const statusText = (entry.status === 'completed' || entry.status === 'taken') ? 'Completed' : 'Missed';
+                
+                return `
+                  <tr>
+                    <td>${dateStr}</td>
+                    <td>${timeStr}</td>
+                    <td>${entry.medication?.name || 'Unknown'}</td>
+                    <td>${entry.medication?.dosage || '-'}</td>
+                    <td class="${statusClass}">${statusText}</td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+          
+          <div class="footer">
+            <p>AquaTab - Medication Tracking Report</p>
+          </div>
+        </body>
+        </html>
+      `;
+
+      // Generate PDF
+      const { uri } = await Print.printToFileAsync({ html });
+      
+      // Share PDF
+      if (await Sharing.isAvailableAsync()) {
+        await Sharing.shareAsync(uri, {
+          mimeType: 'application/pdf',
+          dialogTitle: 'Medication History Report',
+        });
+      } else {
+        Alert.alert('Success', `PDF saved to: ${uri}`);
+      }
+    } catch (error) {
+      console.error('Error exporting PDF:', error);
+      Alert.alert('Error', 'Failed to generate PDF report.');
+    } finally {
+      setExporting(false);
+    }
+  }, [medicationHistory, exporting]);
 
   // Memoized stats list
   const statsList = useMemo(
@@ -311,13 +636,26 @@ export default function Activity() {
         contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top || 12 }]}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
-        {/* Header */}
+        {/* Header with Export Button */}
         <View style={styles.header}>
-          <Text style={styles.title}>Activity</Text>
-          <Text style={styles.subtitle}>View your notification history</Text>
+          <View>
+            <Text style={styles.title}>Activity</Text>
+            <Text style={styles.subtitle}>View your notification history</Text>
+          </View>
+          <TouchableOpacity
+            style={styles.exportBtn}
+            onPress={exportToPDF}
+            disabled={exporting || medicationHistory.length === 0}
+          >
+            {exporting ? (
+              <ActivityIndicator size="small" color="#1E3A8A" />
+            ) : (
+              <Ionicons name="download-outline" size={22} color="#1E3A8A" />
+            )}
+          </TouchableOpacity>
         </View>
 
-        {/* Stats Cards */}
+        {/* Stats Cards - Real Data */}
         <View style={styles.statsRow}>
           {statsList.map(s => (
             <View
@@ -329,6 +667,86 @@ export default function Activity() {
               <Text style={styles.statLabel}>{s.label}</Text>
             </View>
           ))}
+        </View>
+
+        {/* Adherence Trends Section */}
+        <View style={styles.sectionHeaderRow}>
+          <Text style={styles.sectionTitle}>Adherence Trends</Text>
+          <View style={styles.periodToggle}>
+            <TouchableOpacity
+              style={[styles.periodBtn, adherencePeriod === '7' && styles.periodBtnActive]}
+              onPress={() => setAdherencePeriod('7')}
+            >
+              <Text style={[styles.periodText, adherencePeriod === '7' && styles.periodTextActive]}>
+                7 Days
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.periodBtn, adherencePeriod === '30' && styles.periodBtnActive]}
+              onPress={() => setAdherencePeriod('30')}
+            >
+              <Text style={[styles.periodText, adherencePeriod === '30' && styles.periodTextActive]}>
+                30 Days
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* Chart with Premium Lock */}
+        <View style={styles.chartContainer}>
+          {subscription?.plan_slug !== 'premium' ? (
+            <TouchableOpacity
+              style={styles.premiumLockOverlay}
+              onPress={() => setShowPremiumModal(true)}
+            >
+              <View style={styles.lockContent}>
+                <Ionicons name="lock-closed" size={40} color="#F59E0B" />
+                <Text style={styles.lockTitle}>Premium Feature</Text>
+                <Text style={styles.lockText}>Unlock detailed adherence analytics</Text>
+              </View>
+            </TouchableOpacity>
+          ) : adherenceTrends.length > 0 ? (
+            <View style={styles.chart}>
+              <View style={styles.chartBars}>
+                {adherenceTrends.map((trend, idx) => (
+                  <View key={idx} style={styles.barColumn}>
+                    <View style={styles.barContainer}>
+                      <View
+                        style={[
+                          styles.bar,
+                          {
+                            height: `${trend.percentage}%`,
+                            backgroundColor: trend.percentage >= 80 ? '#10B981' : trend.percentage >= 50 ? '#F59E0B' : '#EF4444',
+                          },
+                        ]}
+                      />
+                    </View>
+                    <Text style={styles.barLabel}>
+                      {new Date(trend.date).getDate()}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              <View style={styles.chartLegend}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#10B981' }]} />
+                  <Text style={styles.legendText}>Good (≥80%)</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#F59E0B' }]} />
+                  <Text style={styles.legendText}>Fair (50-79%)</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, { backgroundColor: '#EF4444' }]} />
+                  <Text style={styles.legendText}>Poor (&lt;50%)</Text>
+                </View>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.emptyChart}>
+              <Text style={styles.emptyChartText}>No data available for the selected period</Text>
+            </View>
+          )}
         </View>
 
         {/* Quick Actions */}
@@ -353,7 +771,7 @@ export default function Activity() {
 
         {loading ? (
           <ActivityIndicator style={{ marginTop: 24 }} size="large" color="#1E3A8A" />
-        ) : notifications.length === 0 ? (
+        ) : medicationHistory.length === 0 && notifications.length === 0 ? (
           <View style={styles.emptyBox}>
             <Ionicons name="notifications-off-outline" size={40} color="#94a3b8" />
             <Text style={styles.emptyTitle}>No Activity Yet</Text>
@@ -361,6 +779,49 @@ export default function Activity() {
           </View>
         ) : (
           <View>
+            {/* Medication History Items */}
+            {medicationHistory
+              .sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime())
+              .slice(0, 20)
+              .map(entry => (
+                <View key={entry.id} style={styles.listItem}>
+                  <View style={styles.listIconWrap}>
+                    <PillIcon
+                      name={entry.medication?.icon || 'default'}
+                      size={20}
+                      color="#1E3A8A"
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <View style={styles.itemHeaderRow}>
+                      <Text style={styles.itemTitle}>{entry.medication?.name || 'Medication'}</Text>
+                      <View
+                        style={[
+                          styles.statusPill,
+                          { backgroundColor: getStatusBg(entry.status as NotificationStatus) },
+                        ]}
+                      >
+                        <Text
+                          style={[
+                            styles.statusText,
+                            { color: getStatusColor(entry.status as NotificationStatus) },
+                          ]}
+                        >
+                          {getStatusText(entry.status as NotificationStatus)}
+                        </Text>
+                      </View>
+                    </View>
+                    {entry.medication?.dosage && (
+                      <Text style={styles.itemMessage}>{entry.medication.dosage}</Text>
+                    )}
+                    <Text style={styles.itemMeta}>
+                      {formatDate(entry.time)} • {formatTime(entry.time)}
+                    </Text>
+                  </View>
+                </View>
+              ))}
+
+            {/* Legacy Notifications */}
             {notifications.map(n => (
               <View key={n.id} style={styles.listItem}>
                 <View style={styles.listIconWrap}>
@@ -429,6 +890,16 @@ export default function Activity() {
         )}
       </ScrollView>
       <BottomNavigation currentRoute="notification" />
+      
+      {/* Premium Lock Modal */}
+      {showPremiumModal && (
+        <PremiumLockModal
+          visible={showPremiumModal}
+          onClose={() => setShowPremiumModal(false)}
+          featureName="Adherence Trends Analytics"
+          token={token}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -444,6 +915,9 @@ const styles = StyleSheet.create({
   },
   header: {
     marginBottom: 16,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
   },
   title: {
     color: '#1F2937',
@@ -453,6 +927,16 @@ const styles = StyleSheet.create({
   subtitle: {
     color: '#6B7280',
     marginTop: 4,
+  },
+  exportBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: 'white',
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   sectionHeaderRow: {
     marginTop: 8,
@@ -487,6 +971,129 @@ const styles = StyleSheet.create({
   statLabel: {
     color: '#94a3b8',
     fontSize: 12,
+  },
+  periodToggle: {
+    flexDirection: 'row',
+    backgroundColor: 'white',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    overflow: 'hidden',
+  },
+  periodBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    backgroundColor: 'white',
+  },
+  periodBtnActive: {
+    backgroundColor: '#1E3A8A',
+  },
+  periodText: {
+    color: '#6B7280',
+    fontWeight: '600',
+    fontSize: 13,
+  },
+  periodTextActive: {
+    color: 'white',
+  },
+  chartContainer: {
+    backgroundColor: 'white',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+    padding: 16,
+    marginBottom: 16,
+    minHeight: 200,
+    position: 'relative',
+  },
+  premiumLockOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+  },
+  lockContent: {
+    alignItems: 'center',
+    gap: 8,
+  },
+  lockTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#1F2937',
+  },
+  lockText: {
+    fontSize: 14,
+    color: '#6B7280',
+  },
+  chart: {
+    flex: 1,
+  },
+  chartBars: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    height: 150,
+    marginBottom: 8,
+  },
+  barColumn: {
+    flex: 1,
+    alignItems: 'center',
+    gap: 4,
+  },
+  barContainer: {
+    flex: 1,
+    width: '70%',
+    justifyContent: 'flex-end',
+  },
+  bar: {
+    width: '100%',
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 4,
+    minHeight: 4,
+  },
+  barLabel: {
+    fontSize: 10,
+    color: '#6B7280',
+    fontWeight: '600',
+  },
+  chartLegend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E5E7EB',
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 12,
+    color: '#6B7280',
+  },
+  emptyChart: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  emptyChartText: {
+    color: '#6B7280',
+    fontSize: 14,
   },
   actionsRow: {
     flexDirection: 'row',

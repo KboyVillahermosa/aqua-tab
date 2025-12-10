@@ -425,57 +425,83 @@ class AdminController extends Controller
 
     public function updateUser(Request $request, User $user)
     {
+        // If the request came from the subscription tab, don't require the account fields
+        $isSubscriptionAction = $request->filled('subscription_plan_id') || $request->has('remove_subscription');
+
+        if ($isSubscriptionAction) {
+            $validated = $request->validate([
+                'subscription_plan_id' => 'nullable|exists:subscription_plans,id',
+                'subscription_duration' => 'nullable|integer|min:1|max:365',
+                'remove_subscription' => 'nullable|boolean',
+            ]);
+
+            if ($request->filled('subscription_plan_id')) {
+                $plan = SubscriptionPlan::find($validated['subscription_plan_id']);
+
+                // Cancel any current active subscriptions
+                $user->subscriptions()->where('status', 'active')->update([
+                    'status' => 'cancelled',
+                    'cancelled_at' => now(),
+                ]);
+
+                $duration = (int) ($validated['subscription_duration'] ?? 30); // Ensure numeric for Carbon
+                $startsAt = now();
+                $endsAt = $startsAt->copy()->addDays($duration);
+
+                // Create the new granted subscription
+                $subscription = $user->subscriptions()->create([
+                    'subscription_plan_id' => $plan->id,
+                    'status' => 'active',
+                    'starts_at' => $startsAt,
+                    'ends_at' => $endsAt,
+                    'payment_method' => 'admin_grant',
+                    'payment_reference' => 'Admin granted by ' . Auth::user()->name,
+                ]);
+
+                // Record the transaction for auditing
+                SubscriptionTransaction::create([
+                    'user_id' => $user->id,
+                    'subscription_id' => $subscription->id,
+                    'amount' => $plan->price ?? 0,
+                    'currency' => 'PHP',
+                    'payment_method' => 'admin_grant',
+                    'transaction_id' => 'ADMIN-' . uniqid(),
+                    'status' => 'completed',
+                    'auto_renewal' => false,
+                    'notes' => 'Granted by admin: ' . Auth::user()->name,
+                ]);
+
+                // Update user flags so premium access is unlocked immediately
+                $user->update([
+                    'current_subscription_plan_id' => $plan->id,
+                    'subscription_expires_at' => $endsAt,
+                ]);
+            } elseif ($request->has('remove_subscription')) {
+                // Cancel active subscriptions if remove_subscription is checked
+                $user->subscriptions()->where('status', 'active')->update([
+                    'status' => 'cancelled',
+                    'cancelled_at' => now(),
+                ]);
+
+                // Reset the user's plan to free
+                $user->update([
+                    'current_subscription_plan_id' => null,
+                    'subscription_expires_at' => null,
+                ]);
+            }
+
+            return redirect()->route('admin.users.edit', $user)->with('success', 'Subscription updated successfully');
+        }
+
         $validated = $request->validate([
             'name' => 'required|string|max:255',
             'email' => ['required', 'email', Rule::unique('users')->ignore($user->id)],
             'role' => 'required|in:user,admin',
             'status' => 'required|in:active,suspended,banned,unverified',
             'medical_history' => 'nullable|string',
-            'subscription_plan_id' => 'nullable|exists:subscription_plans,id',
-            'subscription_duration' => 'nullable|integer|min:1|max:365',
         ]);
 
         $user->update($validated);
-
-        // Handle subscription update
-        if ($request->filled('subscription_plan_id')) {
-            // Cancel existing active subscriptions
-            $user->subscriptions()->where('status', 'active')->update([
-                'status' => 'cancelled',
-                'cancelled_at' => now(),
-            ]);
-
-            // Create new subscription
-            $duration = $request->subscription_duration ?? 30; // Default 30 days
-            $subscription = $user->subscriptions()->create([
-                'subscription_plan_id' => $request->subscription_plan_id,
-                'status' => 'active',
-                'starts_at' => now(),
-                'ends_at' => now()->addDays($duration),
-                'payment_method' => 'admin_grant',
-                'payment_reference' => 'Admin granted by ' . Auth::user()->name,
-            ]);
-
-            // Create transaction record
-            $plan = SubscriptionPlan::find($request->subscription_plan_id);
-            SubscriptionTransaction::create([
-                'user_id' => $user->id,
-                'subscription_id' => $subscription->id,
-                'amount' => $plan->price ?? 0,
-                'currency' => 'PHP',
-                'payment_method' => 'admin_grant',
-                'transaction_id' => 'ADMIN-' . uniqid(),
-                'status' => 'completed',
-                'auto_renewal' => false,
-                'notes' => 'Granted by admin: ' . Auth::user()->name,
-            ]);
-        } elseif ($request->has('remove_subscription')) {
-            // Cancel active subscriptions if remove_subscription is checked
-            $user->subscriptions()->where('status', 'active')->update([
-                'status' => 'cancelled',
-                'cancelled_at' => now(),
-            ]);
-        }
 
         return redirect()->route('admin.users.edit', $user)->with('success', 'User updated successfully');
     }

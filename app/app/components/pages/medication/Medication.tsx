@@ -114,7 +114,12 @@ export default function Medication() {
         if (token) {
           // load from backend
           const serverMeds: any[] = await api.get('/medications', token as string);
-          setMeds(serverMeds || []);
+          // Ensure all IDs are strings for consistency
+          const normalizedMeds = (serverMeds || []).map(m => ({
+            ...m,
+            id: m.id.toString()
+          }));
+          setMeds(normalizedMeds);
 
           // Load everything in parallel for better performance
           const [historyResults, statsData, upcomingData, subscriptionData] = await Promise.allSettled([
@@ -189,12 +194,34 @@ export default function Medication() {
     })();
   }, [token]);
 
+  // Persist medications to local storage
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(meds)).catch((e: any) => console.log(e));
+    const saveMeds = async () => {
+      try {
+        await AsyncStorage.setItem(STORAGE_KEYS.MEDS, JSON.stringify(meds));
+      } catch (error) {
+        console.log('Error saving medications:', error);
+      }
+    };
+    
+    if (meds.length > 0) {
+      saveMeds();
+    }
   }, [meds]);
 
+  // Persist history to local storage
   useEffect(() => {
-    AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history)).catch((e: any) => console.log(e));
+    const saveHistory = async () => {
+      try {
+        await AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(history));
+      } catch (error) {
+        console.log('Error saving history:', error);
+      }
+    };
+    
+    if (history.length > 0) {
+      saveHistory();
+    }
   }, [history]);
 
   // Handle medicine pre-fill from home search
@@ -467,7 +494,12 @@ export default function Medication() {
 
       // Update medications
       if (medsData.status === 'fulfilled') {
-        setMeds(medsData.value || []);
+        // Ensure all IDs are strings for consistency
+        const normalizedMeds = (medsData.value || []).map((m: any) => ({
+          ...m,
+          id: m.id.toString()
+        }));
+        setMeds(normalizedMeds);
       }
 
       // Update history
@@ -625,21 +657,39 @@ export default function Medication() {
       return;
     }
 
-    // Save to server first, then reload all data
+    // Create new history entry
+    const newHistoryEntry: HistoryEntry = {
+      id: uid(),
+      medId,
+      time: scheduledTime,
+      status: 'completed'
+    };
+
+    // Update history immediately for better UX
+    setHistory(prev => [newHistoryEntry, ...prev]);
+
+    // Save to server if token exists
     if (token) {
       try {
         console.log('Marking medication as taken:', medId, 'at', scheduledTime);
         const response = await api.post(`/medications/${medId}/history`, { status: 'completed', time: scheduledTime }, token as string);
         console.log('Server response:', response);
-        // Reload all data after marking as taken
-        await reloadAllData();
-        console.log('Data reloaded after marking as taken');
+        // Update with server ID if available
+        if (response && response.id) {
+          setHistory(prev => prev.map(h => 
+            h.id === newHistoryEntry.id ? { ...h, id: response.id.toString() } : h
+          ));
+        }
+        
+        // Also reload stats to update counters
+        await reloadStatsAndUpcoming();
       } catch (err: any) {
         console.log('Error marking medication as taken:', err);
         console.log('Error details:', JSON.stringify(err, null, 2));
         
         if (err?.status === 409) {
-          // Duplicate entry
+          // Duplicate entry - remove the local entry we just added
+          setHistory(prev => prev.filter(h => h.id !== newHistoryEntry.id));
           Alert.alert('Already Logged', err?.data?.message || 'This medication has already been logged for this scheduled time.');
         } else if (err?.status === 404) {
           // Medication not found on server
@@ -668,6 +718,8 @@ export default function Medication() {
   async function snooze(medId: string, mins = 15) {
     const snoozedTime = new Date(Date.now() + mins * 60 * 1000).toISOString();
     const entry: HistoryEntry = { id: uid(), medId, time: snoozedTime, status: 'snoozed' };
+    
+    // Update history immediately for better UX
     setHistory((h) => [entry, ...h]);
     
     // Schedule snooze reminder
@@ -699,7 +751,15 @@ export default function Medication() {
   function clearHistory() {
     Alert.alert('Clear history', 'Remove all medication history?', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: () => setHistory([]) },
+      { text: 'Clear', style: 'destructive', onPress: async () => {
+        setHistory([]);
+        // Also clear from local storage
+        try {
+          await AsyncStorage.removeItem(STORAGE_KEYS.HISTORY);
+        } catch (error) {
+          console.log('Error clearing history from storage:', error);
+        }
+      }},
     ]);
   }
 
@@ -910,7 +970,7 @@ export default function Medication() {
           <Text style={styles.sectionTitle}>Your Medications</Text>
           {meds.length === 0 ? (
           <View style={styles.emptyState}>
-              <Ionicons name="medical" size={48} color="#9CA3AF" />
+              <Ionicons name="medkit" size={48} color="#9CA3AF" />
               <Text style={styles.emptyText}>No medications yet</Text>
               <Text style={styles.emptySubtext}>Tap the + button to add your first medication</Text>
           </View>
@@ -995,10 +1055,19 @@ export default function Medication() {
           {(() => {
             // Filter history: only show entries with valid medications
             // Free users see last 10 entries, Plus sees last 30, Premium sees all
+            console.log('Displaying history. Total entries:', history.length, 'Total meds:', meds.length);
+            console.log('Sample history entry:', history[0]);
+            console.log('Sample med:', meds[0]);
+            
             const validHistory = history.filter(h => {
-              const medExists = meds.find(m => m.id === h.medId);
+              const medExists = meds.find(m => m.id.toString() === h.medId.toString());
+              if (!medExists && h.medId) {
+                console.log('History entry with medId', h.medId, 'has no matching medication');
+              }
               return medExists;
             });
+            
+            console.log('Valid history entries after filtering:', validHistory.length);
             
             // Determine how many entries to show based on subscription
             let entriesToShow = 10; // Free: 10 most recent entries

@@ -33,7 +33,7 @@ class MedicationController extends Controller
             'notes' => 'nullable|string|max:500',
             'color' => 'nullable|string|max:7',
         ]);
-        
+
         // Check subscription limits
         $plan = $user->currentSubscriptionPlan;
         if ($plan && $plan->max_medications !== null) {
@@ -47,18 +47,18 @@ class MedicationController extends Controller
                 ], 403);
             }
         }
-        
+
         $data['user_id'] = $user->id;
-        
+
         // Set default values
         $data['reminder'] = $data['reminder'] ?? true;
         $data['frequency'] = $data['frequency'] ?? 'daily';
         $data['start_date'] = $data['start_date'] ?? now()->toDateString();
         $data['color'] = $data['color'] ?? '#1E3A8A';
-        
+
         $med = Medication::create($data);
         Log::debug('Medication created', ['medication_id' => $med->id, 'user_id' => $user->id]);
-        
+
         return response()->json($med, 201);
     }
 
@@ -106,28 +106,46 @@ class MedicationController extends Controller
 
     public function addHistory(Request $request, Medication $medication)
     {
-        $this->authorizeForUser($request->user(), 'view', $medication);
+        $user = $request->user();
+        $this->authorizeForUser($user, 'view', $medication);
         $data = $request->validate([
             'status' => 'required|string',
             'time' => 'required|date',
         ]);
-        
+
+        Log::info('addHistory called', [
+            'user_id' => $user->id,
+            'medication_id' => $medication->id,
+            'status' => $data['status'],
+            'time' => $data['time'],
+        ]);
+
         // Check for duplicate entries within a 2-hour window of the scheduled time
         // Prevent duplicates for the same scheduled time, regardless of status
         $scheduledTime = \Carbon\Carbon::parse($data['time']);
         $twoHoursBefore = $scheduledTime->copy()->subHours(2);
         $twoHoursAfter = $scheduledTime->copy()->addHours(2);
-        
+
         // Check for any existing entry (completed or skipped) for this time window
         $existingEntry = MedicationHistory::where('medication_id', $medication->id)
             ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
             ->whereIn('status', ['completed', 'skipped'])
             ->first();
-        
+
         if ($existingEntry) {
+            Log::warning('Duplicate entry detected', [
+                'existing_id' => $existingEntry->id,
+                'existing_status' => $existingEntry->status,
+                'new_status' => $data['status'],
+            ]);
             // If trying to mark as completed but already marked as skipped, allow update
             if ($data['status'] === 'completed' && $existingEntry->status === 'skipped') {
-                $existingEntry->update(['status' => 'completed', 'time' => $data['time']]);
+                $existingEntry->update([
+                    'status' => 'completed',
+                    'time' => $data['time'],
+                    'taken_time' => now(),
+                ]);
+                Log::info('Updated skipped to completed', ['entry_id' => $existingEntry->id]);
                 return response()->json($existingEntry->fresh(), 200);
             }
             // If trying to mark as skipped but already marked as completed, don't allow
@@ -143,19 +161,37 @@ class MedicationController extends Controller
                 'existing_entry' => $existingEntry
             ], 409); // Conflict status
         }
-        
+
         $hist = MedicationHistory::create([
             'medication_id' => $medication->id,
+            'user_id' => $user->id,
             'status' => $data['status'],
             'time' => $data['time'],
+            'scheduled_time' => $scheduledTime,
+            'taken_time' => now(),
         ]);
+
+        Log::info('History entry created', [
+            'entry_id' => $hist->id,
+            'medication_id' => $hist->medication_id,
+            'user_id' => $hist->user_id,
+            'status' => $hist->status,
+        ]);
+
         return response()->json($hist, 201);
     }
 
     public function history(Request $request, Medication $medication)
     {
-        $this->authorizeForUser($request->user(), 'view', $medication);
-        return response()->json($medication->history()->orderBy('time', 'desc')->get());
+        $user = $request->user();
+        $this->authorizeForUser($user, 'view', $medication);
+        $historyEntries = $medication->history()->orderBy('time', 'desc')->get();
+        Log::info('History retrieved', [
+            'user_id' => $user->id,
+            'medication_id' => $medication->id,
+            'count' => $historyEntries->count(),
+        ]);
+        return response()->json($historyEntries);
     }
 
     public function getUpcoming(Request $request)
@@ -181,7 +217,7 @@ class MedicationController extends Controller
         }
 
         // Sort by next reminder time
-        usort($upcoming, function($a, $b) {
+        usort($upcoming, function ($a, $b) {
             return strtotime($a['next_reminder']) - strtotime($b['next_reminder']);
         });
 
@@ -192,10 +228,10 @@ class MedicationController extends Controller
     {
         $today = now();
         $time = \Carbon\Carbon::parse($timeString);
-        
+
         // Set today's date with the medication time
         $nextReminder = $today->copy()->setTime($time->hour, $time->minute, $time->second);
-        
+
         // If the time has already passed today, move to tomorrow
         if ($nextReminder->isPast()) {
             $nextReminder->addDay();
@@ -213,7 +249,7 @@ class MedicationController extends Controller
     {
         $user = $request->user();
         $medications = Medication::where('user_id', $user->id)->get();
-        
+
         $stats = [
             'total_medications' => $medications->count(),
             'active_medications' => $medications->where('reminder', true)->count(),
@@ -224,44 +260,47 @@ class MedicationController extends Controller
 
         $today = now()->toDateString();
         $now = now();
-        
+
         foreach ($medications as $med) {
             if (!$med->reminder) continue;
-            
+
             $times = $med->times ?? [];
             $stats['total_reminders_today'] += count($times);
-            
+
             // Count completed and missed for today
             $history = $med->history()
                 ->whereDate('time', $today)
                 ->get();
-                
+
             $stats['completed_today'] += $history->where('status', 'completed')->count();
             $stats['missed_today'] += $history->where('status', 'skipped')->count();
-            
+
             // Auto-mark missed medications that have passed their scheduled time
             foreach ($times as $timeStr) {
                 $scheduledTime = \Carbon\Carbon::parse($timeStr);
                 $todayScheduledTime = $now->copy()->setTime($scheduledTime->hour, $scheduledTime->minute, $scheduledTime->second);
-                
+
                 // If scheduled time has passed (more than 30 minutes ago) and it's still today
                 $thirtyMinutesAgo = $now->copy()->subMinutes(30);
                 if ($todayScheduledTime->isBefore($thirtyMinutesAgo) && $todayScheduledTime->isToday()) {
                     // Check if already marked
                     $twoHoursBefore = $todayScheduledTime->copy()->subHours(2);
                     $twoHoursAfter = $todayScheduledTime->copy()->addHours(2);
-                    
+
                     $existingEntry = MedicationHistory::where('medication_id', $med->id)
                         ->whereBetween('time', [$twoHoursBefore, $twoHoursAfter])
                         ->whereIn('status', ['completed', 'skipped'])
                         ->first();
-                    
+
                     if (!$existingEntry) {
                         // Auto-mark as missed
                         MedicationHistory::create([
                             'medication_id' => $med->id,
+                            'user_id' => $med->user_id,
                             'status' => 'skipped',
                             'time' => $todayScheduledTime,
+                            'scheduled_time' => $todayScheduledTime,
+                            'taken_time' => now(),
                         ]);
                         $stats['missed_today']++;
                     }
@@ -284,18 +323,18 @@ class MedicationController extends Controller
 
         try {
             $startDate = now()->subDays($days);
-            
+
             // Get all medications
             $totalMedications = Medication::count();
             $activeMedications = Medication::where('reminder', true)->count();
-            
+
             // Calculate adherence rate
             $totalHistory = MedicationHistory::where('created_at', '>=', $startDate)->count();
             $takenHistory = MedicationHistory::where('created_at', '>=', $startDate)
                 ->where('status', 'completed')
                 ->count();
             $adherenceRate = $totalHistory > 0 ? round(($takenHistory / $totalHistory) * 100, 1) : 0;
-            
+
             // Count upcoming doses (medications scheduled for today)
             $upcomingDoses = 0;
             $medications = Medication::where('reminder', true)->get();
@@ -303,12 +342,12 @@ class MedicationController extends Controller
                 $times = $med->times ?? [];
                 $upcomingDoses += count($times);
             }
-            
+
             // Count missed doses
             $missedDoses = MedicationHistory::where('created_at', '>=', $startDate)
                 ->where('status', 'skipped')
                 ->count();
-            
+
             // Medication types distribution
             $medicationTypes = Medication::selectRaw('name, COUNT(*) as count')
                 ->groupBy('name')
@@ -321,27 +360,27 @@ class MedicationController extends Controller
                         'count' => $item->count
                     ];
                 });
-            
+
             // Weekly adherence trend
             $weeklyTrend = [];
             $weeks = ceil($days / 7);
             for ($w = $weeks - 1; $w >= 0; $w--) {
                 $weekStart = now()->subWeeks($w)->startOfWeek();
                 $weekEnd = now()->subWeeks($w)->endOfWeek();
-                
+
                 $weekTotal = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])->count();
                 $weekTaken = MedicationHistory::whereBetween('created_at', [$weekStart, $weekEnd])
                     ->where('status', 'completed')
                     ->count();
-                
+
                 $weekAdherence = $weekTotal > 0 ? round(($weekTaken / $weekTotal) * 100, 1) : 0;
-                
+
                 $weeklyTrend[] = [
                     'week' => $weekStart->format('M j'),
                     'adherence_rate' => $weekAdherence
                 ];
             }
-            
+
             // Recent medication history
             $recentHistory = MedicationHistory::with(['medication.user'])
                 ->orderBy('created_at', 'desc')
@@ -370,7 +409,6 @@ class MedicationController extends Controller
                 'weekly_adherence' => $weeklyTrend,
                 'recent_history' => $recentHistory
             ]);
-
         } catch (\Exception $e) {
             Log::error('Medication admin stats error', ['error' => $e->getMessage()]);
             return response()->json([
@@ -394,7 +432,7 @@ class MedicationController extends Controller
     public function exportCsv(Request $request)
     {
         $user = $request->user();
-        
+
         // Check if user has data_export feature
         if (!$user->canAccessFeature('data_export')) {
             return response()->json([
@@ -404,10 +442,10 @@ class MedicationController extends Controller
         }
 
         $medications = Medication::where('user_id', $user->id)->with('history')->get();
-        
+
         $csvData = [];
         $csvData[] = ['Medication Name', 'Dosage', 'Scheduled Time', 'Status', 'Date'];
-        
+
         foreach ($medications as $medication) {
             foreach ($medication->history as $history) {
                 $csvData[] = [
@@ -419,20 +457,20 @@ class MedicationController extends Controller
                 ];
             }
         }
-        
+
         $filename = 'medication_history_' . date('Y-m-d') . '.csv';
         $headers = [
             'Content-Type' => 'text/csv',
             'Content-Disposition' => 'attachment; filename="' . $filename . '"',
         ];
-        
+
         $output = fopen('php://output', 'w');
         foreach ($csvData as $row) {
             fputcsv($output, $row);
         }
         fclose($output);
-        
-        return response()->stream(function() use ($csvData) {
+
+        return response()->stream(function () use ($csvData) {
             $output = fopen('php://output', 'w');
             foreach ($csvData as $row) {
                 fputcsv($output, $row);
@@ -447,7 +485,7 @@ class MedicationController extends Controller
     public function exportPdf(Request $request)
     {
         $user = $request->user();
-        
+
         // Check if user has data_export feature
         if (!$user->canAccessFeature('data_export')) {
             return response()->json([
@@ -457,7 +495,7 @@ class MedicationController extends Controller
         }
 
         $medications = Medication::where('user_id', $user->id)->with('history')->get();
-        
+
         // Generate simple HTML for PDF (can be enhanced with a PDF library like dompdf)
         $html = '<html><head><title>Medication History</title></head><body>';
         $html .= '<h1>Medication History Report</h1>';
@@ -465,7 +503,7 @@ class MedicationController extends Controller
         $html .= '<p>User: ' . htmlspecialchars($user->name) . '</p>';
         $html .= '<table border="1" cellpadding="5" cellspacing="0" style="width:100%; border-collapse:collapse;">';
         $html .= '<tr><th>Medication Name</th><th>Dosage</th><th>Scheduled Time</th><th>Status</th><th>Date</th></tr>';
-        
+
         foreach ($medications as $medication) {
             foreach ($medication->history as $history) {
                 $html .= '<tr>';
@@ -477,11 +515,11 @@ class MedicationController extends Controller
                 $html .= '</tr>';
             }
         }
-        
+
         $html .= '</table></body></html>';
-        
+
         $filename = 'medication_history_' . date('Y-m-d') . '.html';
-        
+
         // For now, return HTML. In production, use a PDF library like dompdf or tcpdf
         return response($html, 200)
             ->header('Content-Type', 'text/html')

@@ -438,11 +438,14 @@
                                     class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
                                     <option value="">Select a plan to grant</option>
                                     @foreach($subscriptionPlans as $plan)
-                                    <option value="{{ $plan->id }}">
+                                    <option value="{{ $plan->id }}" @selected(old('subscription_plan_id', $currentSubscription?->subscription_plan_id) == $plan->id)>
                                         {{ $plan->name }} - ₱{{ number_format($plan->price, 2) }}/{{ $plan->billing_period }}
                                     </option>
                                     @endforeach
                                 </select>
+                                @error('subscription_plan_id')
+                                <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
                             </div>
 
                             <div>
@@ -453,11 +456,14 @@
                                     type="number"
                                     id="subscription_duration"
                                     name="subscription_duration"
-                                    value="30"
+                                    value="{{ old('subscription_duration', 30) }}"
                                     min="1"
                                     max="365"
                                     class="w-full px-4 py-2.5 border border-slate-200 rounded-lg bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition">
                                 <p class="text-xs text-slate-500 mt-1.5">Default: 30 days</p>
+                                @error('subscription_duration')
+                                <p class="mt-1.5 text-sm text-red-600">{{ $message }}</p>
+                                @enderror
                             </div>
 
                             <button type="submit" class="w-full px-6 py-2.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 font-medium transition-colors shadow-sm">
