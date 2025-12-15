@@ -29,9 +29,6 @@ interface UserDetails {
   weight?: number;
   weight_unit?: string;
   age?: number;
-  reminder_tone?: string;
-  notification_permissions_accepted?: boolean;
-  battery_optimization_set?: boolean;
 }
 
 export default function ProfileDetails() {
@@ -258,45 +255,6 @@ export default function ProfileDetails() {
               <View style={styles.infoContent}>
                 <Text style={styles.infoLabel}>End of Day Time</Text>
                 <Text style={styles.infoValue}>{formatTime(user.end_of_day_time)}</Text>
-              </View>
-            </View>
-          </View>
-        </View>
-
-        {/* App Settings Section */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>App Settings</Text>
-          <View style={styles.card}>
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Reminder Tone</Text>
-              <Text style={styles.infoValue}>{user.reminder_tone || 'Default'}</Text>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Notifications Enabled</Text>
-              <View style={styles.statusBadge}>
-                <Ionicons 
-                  name={user.notification_permissions_accepted ? "checkmark-circle" : "close-circle"} 
-                  size={20} 
-                  color={user.notification_permissions_accepted ? "#10B981" : "#EF4444"} 
-                />
-                <Text style={[styles.statusText, { color: user.notification_permissions_accepted ? "#10B981" : "#EF4444" }]}>
-                  {user.notification_permissions_accepted ? 'Enabled' : 'Disabled'}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.divider} />
-            <View style={styles.infoRow}>
-              <Text style={styles.infoLabel}>Battery Optimization</Text>
-              <View style={styles.statusBadge}>
-                <Ionicons 
-                  name={user.battery_optimization_set ? "checkmark-circle" : "close-circle"} 
-                  size={20} 
-                  color={user.battery_optimization_set ? "#10B981" : "#EF4444"} 
-                />
-                <Text style={[styles.statusText, { color: user.battery_optimization_set ? "#10B981" : "#EF4444" }]}>
-                  {user.battery_optimization_set ? 'Configured' : 'Not Configured'}
-                </Text>
               </View>
             </View>
           </View>

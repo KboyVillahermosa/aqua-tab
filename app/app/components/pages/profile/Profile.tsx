@@ -67,6 +67,16 @@ export default function Profile() {
     return name.split(' ').map(n => n[0]).join('').toUpperCase();
   };
 
+  const getTierTheme = (slug?: string) => {
+    const normalized = slug?.toLowerCase?.() || '';
+    if (normalized === 'premium') return { color: '#F59E0B', borderWidth: 4 };
+    if (normalized.includes('plus')) return { color: '#60A5FA', borderWidth: 4 };
+    return { color: '#E5E7EB', borderWidth: 0 };
+  };
+
+  const planSlug = (user as any)?.subscription?.plan_slug;
+  const tierTheme = getTierTheme(planSlug);
+
   if (loading) {
     return (
       <SafeAreaView style={styles.container}>
@@ -106,7 +116,7 @@ export default function Profile() {
         {/* Profile Header */}
         <View style={styles.profileHeader}>
           <View style={styles.avatarContainer}>
-            <View style={styles.avatar}>
+            <View style={[styles.avatar, { borderColor: tierTheme.color, borderWidth: tierTheme.borderWidth }]}>
               <Text style={styles.avatarText}>{getInitials(user.name)}</Text>
             </View>
             <TouchableOpacity style={styles.cameraButton} onPress={() => setEditVisible(true)}>
@@ -155,19 +165,32 @@ export default function Profile() {
         {/* Logout Button */}
         <TouchableOpacity 
           style={styles.logoutButton}
-          onPress={async () => {
-            try {
-              await fetch('http://10.0.2.2:8000/api/logout', {
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': `Bearer ${token}`,
-                },
-              });
-            } catch (err) {
-              console.log('Logout error:', err);
-            }
-            router.replace({ pathname: '/login' } as any);
+          onPress={() => {
+            Alert.alert(
+              'Sign Out',
+              'Are you sure you want to sign out of your account?',
+              [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                  text: 'Sign Out',
+                  style: 'destructive',
+                  onPress: async () => {
+                    try {
+                      await fetch('http://10.0.2.2:8000/api/logout', {
+                        method: 'POST',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${token}`,
+                        },
+                      });
+                    } catch (err) {
+                      console.log('Logout error:', err);
+                    }
+                    router.replace({ pathname: '/login' } as any);
+                  }
+                }
+              ]
+            );
           }}
         >
           <Ionicons name="log-out-outline" size={20} color="#EF4444" />
@@ -386,11 +409,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'white',
-    borderRadius: 12,
+    borderRadius: 16,
     paddingVertical: 16,
     marginBottom: 100,
     borderWidth: 1,
     borderColor: '#FEE2E2',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 4,
   },
   logoutText: {
     fontSize: 16,

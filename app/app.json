@@ -4,7 +4,7 @@
     "slug": "AQUATAB",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./app/assets/images/mainlogo.png", 
+    "icon": "./app/assets/images/mainlogo.png",
     "scheme": "app",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -14,7 +14,7 @@
     "android": {
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "adaptiveIcon": {  
+      "adaptiveIcon": {
         "foregroundImage": "./app/assets/images/mainlogo.png",
         "backgroundColor": "#1E3A8A"
       }
@@ -31,10 +31,11 @@
           "image": "./app/assets/images/mainlogo.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#1E3A8A" 
+          "backgroundColor": "#1E3A8A"
         }
       ],
-      "expo-web-browser"
+      "expo-web-browser",
+      "expo-audio"
     ],
     "splash": {
       "image": "./app/assets/images/mainlogo.png",

@@ -47,6 +47,7 @@ export default function Home() {
   const [premiumPopupVisible, setPremiumPopupVisible] = useState(false);
   const [premiumLockVisible, setPremiumLockVisible] = useState(false);
   const [premiumCongratsVisible, setPremiumCongratsVisible] = useState(false);
+  const [plusCongratsVisible, setPlusCongratsVisible] = useState(false);
   const [weeklyReportExpanded, setWeeklyReportExpanded] = useState(false);
   const [weeklyReport, setWeeklyReport] = useState<any>(null);
   const [patterns, setPatterns] = useState<any[]>([]);
@@ -58,6 +59,27 @@ export default function Home() {
   const [showOverHydrationModal, setShowOverHydrationModal] = useState(false);
   const [previousHydrationPercentage, setPreviousHydrationPercentage] = useState(0);
   const premiumCongratsShownRef = useRef(false);
+  const plusCongratsShownRef = useRef(false);
+
+  // Plan / tier helpers
+  const planSlug = subscription?.plan_slug?.toLowerCase?.();
+  const isPlus = planSlug?.includes('plus');
+  const isPremium = planSlug === 'premium';
+  const isFree = !isPlus && !isPremium;
+
+  const getTierTheme = (slug?: string) => {
+    const normalized = slug?.toLowerCase?.() || '';
+    if (normalized === 'premium') {
+      return { color: '#F59E0B', icon: 'trophy' as const, label: 'Premium' };
+    }
+    if (normalized.includes('plus')) {
+      return { color: '#60A5FA', icon: 'star' as const, label: 'PLUS+' };
+    }
+    return { color: '#9CA3AF', icon: 'ellipse-outline' as const, label: 'Free' };
+  };
+
+  const tierTheme = getTierTheme(subscription?.plan_slug);
+  const insightsScore = weeklyReport?.overall_score ?? 0;
 
   // Enable layout animation on Android for smooth collapses
   useEffect(() => {
@@ -239,7 +261,7 @@ export default function Home() {
 
   // Load Smart Insights when subscription is available (non-blocking)
   useEffect(() => {
-    if (subscription?.plan_slug === 'premium' && token) {
+    if ((isPremium || isPlus) && token) {
       const loadInsights = async () => {
         try {
           // Use Promise.allSettled to prevent one failing from blocking others
@@ -269,12 +291,12 @@ export default function Home() {
       setPatterns([]);
       setSnoozeSuggestions([]);
     }
-  }, [subscription?.plan_slug, token]);
+  }, [isPremium, isPlus, token]);
 
   // One-time premium congratulations popup when user becomes premium (persistent with AsyncStorage)
   useEffect(() => {
     const checkAndShowPremiumPopup = async () => {
-      if (subscription?.plan_slug === 'premium' && !premiumCongratsShownRef.current) {
+      if (isPremium && !premiumCongratsShownRef.current) {
         try {
           const hasSeenPopup = await AsyncStorage.getItem('hasSeenPremiumPopup');
           if (!hasSeenPopup) {
@@ -289,7 +311,26 @@ export default function Home() {
       }
     };
     checkAndShowPremiumPopup();
-  }, [subscription?.plan_slug]);
+  }, [isPremium]);
+
+  // One-time PLUS+ congratulations popup when user becomes PLUS (persistent with AsyncStorage)
+  useEffect(() => {
+    const checkAndShowPlusPopup = async () => {
+      if (isPlus && !plusCongratsShownRef.current) {
+        try {
+          const hasSeenPlus = await AsyncStorage.getItem('hasSeenPlusCongrats');
+          if (!hasSeenPlus) {
+            plusCongratsShownRef.current = true;
+            setPlusCongratsVisible(true);
+            await AsyncStorage.setItem('hasSeenPlusCongrats', 'true');
+          }
+        } catch (err) {
+          console.log('Error checking plus popup flag:', err);
+        }
+      }
+    };
+    checkAndShowPlusPopup();
+  }, [isPlus]);
 
   // Real-time hydration data refresh when screen comes into focus
   useFocusEffect(
@@ -408,10 +449,18 @@ export default function Home() {
     return 'notifications';
   };
 
+  const handleInsightsPress = () => {
+    if (isPremium) {
+      router.push({ pathname: '/insights', params: { token } } as any);
+    } else {
+      setPremiumPopupVisible(true);
+    }
+  };
+
   const menuItems = [
     { label: 'Profile', icon: 'person-outline', route: '/components/pages/profile/Profile' },
     { label: 'Settings', icon: 'settings-outline', route: '/components/pages/settings/Settings' },
-    { label: 'Help & Support', icon: 'help-circle-outline', route: null },
+    { label: 'Help & Support', icon: 'help-circle-outline', route: '/components/pages/profile/HelpSupport' },
   ];
 
   const handleMenuAction = (item: typeof menuItems[0]) => {
@@ -446,7 +495,21 @@ export default function Home() {
 
           {/* Welcome Section */}
           <View style={styles.welcomeSection}>
-          <Text style={styles.welcomeText}>Hi, {displayName}</Text>
+          <View style={styles.welcomeRow}>
+            <Text style={styles.welcomeText}>Hi, {displayName}</Text>
+            {isPremium && (
+              <View style={[styles.tierBadge, { backgroundColor: '#FEF3C7', borderColor: tierTheme.color }]}>
+                <Ionicons name={tierTheme.icon} size={16} color={tierTheme.color} style={{ marginRight: 6 }} />
+                <Text style={[styles.tierBadgeText, { color: '#92400E' }]}>{tierTheme.label}</Text>
+              </View>
+            )}
+            {isPlus && !isPremium && (
+              <View style={[styles.tierBadge, { backgroundColor: '#EFF6FF', borderColor: tierTheme.color }]}>
+                <Ionicons name={tierTheme.icon} size={16} color={tierTheme.color} style={{ marginRight: 6 }} />
+                <Text style={[styles.tierBadgeText, { color: '#1E3A8A' }]}>{tierTheme.label}</Text>
+              </View>
+            )}
+          </View>
           
           <View>
             <View style={styles.searchContainer}>
@@ -539,8 +602,24 @@ export default function Home() {
           </View>
           </View>
 
-          {/* Premium Badge - Show if not premium */}
-          {subscription && subscription.plan_slug !== 'premium' && (
+          {/* Upsell Banner */}
+          {isPlus && (
+            <TouchableOpacity 
+              style={styles.plusBadge}
+              onPress={() => setPremiumPopupVisible(true)}
+            >
+              <View style={styles.premiumBadgeContent}>
+                <Ionicons name="star" size={20} color="#2563EB" />
+                <View style={styles.premiumBadgeText}>
+                  <Text style={[styles.premiumBadgeTitle, { color: '#1E3A8A' }]}>Upgrade to Premium</Text>
+                  <Text style={[styles.premiumBadgeSubtitle, { color: '#1F2937' }]}>Get Smart Insights & AI Analysis</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color="#2563EB" />
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {isFree && (
             <TouchableOpacity 
               style={styles.premiumBadge}
               onPress={() => setPremiumPopupVisible(true)}
@@ -557,7 +636,7 @@ export default function Home() {
           )}
 
           {/* Weekly Report Card - Premium Feature */}
-          {subscription?.plan_slug === 'premium' && weeklyReport && (
+          {isPremium && weeklyReport && (
             <View style={styles.weeklyReportCard}>
               <TouchableOpacity
                 activeOpacity={0.8}
@@ -604,7 +683,7 @@ export default function Home() {
           )}
 
           {/* Snooze Suggestions - Premium Feature */}
-          {subscription?.plan_slug === 'premium' && snoozeSuggestions.length > 0 && (
+          {isPremium && snoozeSuggestions.length > 0 && (
             <View style={styles.snoozeCard}>
             <View style={styles.snoozeHeader}>
               <Ionicons name="time" size={24} color="#10B981" />
@@ -746,31 +825,43 @@ export default function Home() {
           {/* Smart Insights Card */}
           <TouchableOpacity 
             style={styles.summaryCard}
-            onPress={() => {
-              if (subscription?.plan_slug === 'premium') {
-                router.push({ pathname: '/insights', params: { token } } as any);
-              } else {
-                setPremiumPopupVisible(true);
-              }
-            }}
+            onPress={handleInsightsPress}
             activeOpacity={0.7}
           >
             <View style={styles.summaryCardHeader}>
               <View>
                 <Text style={styles.summaryCardTitle}>Smart Insights</Text>
                 <Text style={styles.summaryCardSubtitle}>
-                  {subscription?.plan_slug === 'premium' ? 'Weekly Adherence: 85%' : 'Unlock to see patterns'}
+                  {isPremium || isPlus
+                    ? `Weekly Adherence: ${insightsScore}%`
+                    : 'Unlock to see patterns'}
                 </Text>
               </View>
-              {subscription?.plan_slug === 'premium' ? (
+              {(isPremium || isPlus) ? (
                 <Ionicons name="analytics" size={32} color="#F59E0B" />
               ) : (
                 <Ionicons name="lock-closed" size={32} color="#F59E0B" />
               )}
             </View>
-            {subscription?.plan_slug === 'premium' && weeklyReport && (
+
+            {(isPremium || isPlus) && weeklyReport && (
               <View style={styles.progressBarContainer}>
-                <View style={[styles.progressBar, { width: '85%', backgroundColor: '#F59E0B' }]} />
+                <View style={[styles.progressBar, { width: `${Math.min(insightsScore, 100)}%`, backgroundColor: '#F59E0B' }]} />
+              </View>
+            )}
+
+            {isPlus && (
+              <View style={styles.insightsTeaserContainer}>
+                <TouchableOpacity 
+                  style={styles.insightsTeaserButton}
+                  onPress={(e) => {
+                    e.stopPropagation();
+                    setPremiumPopupVisible(true);
+                  }}
+                >
+                  <Ionicons name="lock-closed" size={14} color="#F59E0B" style={{ marginRight: 6 }} />
+                  <Text style={styles.insightsTeaserButtonText}>Unlock AI Analysis</Text>
+                </TouchableOpacity>
               </View>
             )}
           </TouchableOpacity>
@@ -892,6 +983,35 @@ export default function Home() {
             </Text>
             <TouchableOpacity style={styles.premiumCongratsButton} onPress={() => setPremiumCongratsVisible(false)}>
               <Text style={styles.premiumCongratsButtonText}>Awesome</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* PLUS Congratulations Modal */}
+      <Modal
+        visible={plusCongratsVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPlusCongratsVisible(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.plusCongratsContent}>
+            <Ionicons name="star" size={40} color="#2563EB" />
+            <Text style={styles.plusCongratsTitle}>Welcome to PLUS+</Text>
+            <Text style={styles.plusCongratsBody}>
+              Enjoy enhanced reminders, offline access, and extended history. You are one step away from full Premium insights.
+            </Text>
+            <View style={styles.plusFeatureList}>
+              {['Unlimited Reminders', 'Offline Access', 'Extended History'].map((feature) => (
+                <View key={feature} style={styles.plusFeatureItem}>
+                  <Ionicons name="checkmark-circle" size={20} color="#2563EB" />
+                  <Text style={styles.plusFeatureText}>{feature}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity style={styles.plusCongratsButton} onPress={() => setPlusCongratsVisible(false)}>
+              <Text style={styles.plusCongratsButtonText}>Got it</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -1042,11 +1162,30 @@ const styles = StyleSheet.create({
   welcomeSection: {
     marginBottom: 24,
   },
+  welcomeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
   welcomeText: {
     fontSize: 24,
     fontWeight: '700',
     color: '#1F2937',
     marginBottom: 16,
+  },
+  tierBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+  tierBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.2,
   },
   searchContainer: {
     flexDirection: 'row',
@@ -1432,6 +1571,14 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#FED7AA',
   },
+  plusBadge: {
+    backgroundColor: '#EFF6FF',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: '#60A5FA',
+  },
   premiumBadgeContent: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1556,6 +1703,84 @@ const styles = StyleSheet.create({
     width: '100%',
   },
   premiumCongratsButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  insightsTeaserContainer: {
+    marginTop: 8,
+    paddingVertical: 10,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  insightsTeaserButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'white',
+    borderRadius: 999,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#F59E0B',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  insightsTeaserButtonText: {
+    color: '#F59E0B',
+    fontSize: 13,
+    fontWeight: '700',
+  },
+  plusCongratsContent: {
+    backgroundColor: 'white',
+    borderRadius: 20,
+    padding: 24,
+    width: '100%',
+    maxWidth: 360,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#DBEAFE',
+  },
+  plusCongratsTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#111827',
+    marginTop: 12,
+    marginBottom: 8,
+    textAlign: 'center',
+  },
+  plusCongratsBody: {
+    fontSize: 15,
+    color: '#374151',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 16,
+  },
+  plusFeatureList: {
+    width: '100%',
+    marginBottom: 16,
+  },
+  plusFeatureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  plusFeatureText: {
+    fontSize: 15,
+    color: '#1F2937',
+    fontWeight: '600',
+  },
+  plusCongratsButton: {
+    backgroundColor: '#2563EB',
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    alignItems: 'center',
+    width: '100%',
+  },
+  plusCongratsButtonText: {
     color: 'white',
     fontSize: 16,
     fontWeight: '700',

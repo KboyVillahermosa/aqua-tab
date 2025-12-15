@@ -81,10 +81,10 @@ export default function Premium() {
       </View>
 
       <View style={styles.features}>
-        <Feature text="Basic reminders for hydration & medication" />
-        <Feature text="Track up to 2 medications and daily water intake" />
-        <Feature text="Manual logging only" />
-        <Feature text="7-day activity history" />
+        <Feature text="Basic reminders for hydration & medication" color="#9CA3AF" />
+        <Feature text="Track up to 2 medications and daily water intake" color="#9CA3AF" />
+        <Feature text="Manual logging only" color="#9CA3AF" />
+        <Feature text="7-day activity history" color="#9CA3AF" />
       </View>
 
       <View style={styles.cardFooter}>
@@ -98,23 +98,23 @@ export default function Premium() {
       <View style={styles.cardHeaderRow}>
         <Text style={styles.cardTitle}>PLUS+</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {isCurrent && <Text style={styles.currentBadge}>Current</Text>}
-          <Text style={styles.price}>₱89 / month</Text>
+          {isCurrent && <Text style={styles.currentBadgePlus}>Current</Text>}
+          <Text style={styles.pricePlus}>₱89 / month</Text>
         </View>
       </View>
 
       <View style={styles.features}>
-        <Feature text="Everything in Free" />
-        <Feature text="Unlimited reminders" />
-        <Feature text="Track up to 10 medications with dosage schedules" />
-        <Feature text="30-day adherence history" />
-        <Feature text="Basic health stats & charts" />
-        <Feature text="Offline reminders" />
-        <Feature text="Personalized notification" />
+        <Feature text="Everything in Free" color="#60A5FA" />
+        <Feature text="Unlimited reminders" color="#60A5FA" />
+        <Feature text="Track up to 10 medications with dosage schedules" color="#60A5FA" />
+        <Feature text="30-day adherence history" color="#60A5FA" />
+        <Feature text="Basic health stats & charts" color="#60A5FA" />
+        <Feature text="Offline reminders" color="#60A5FA" />
+        <Feature text="Personalized notification" color="#60A5FA" />
       </View>
 
       <TouchableOpacity
-        style={[styles.ctaButton, subscribing ? styles.ctaButtonDisabled : null]}
+        style={[styles.ctaButtonPlus, subscribing ? styles.ctaButtonDisabled : null]}
         disabled={subscribing || isCurrent}
         onPress={() => handleSubscribe('plus')}
       >
@@ -128,19 +128,19 @@ export default function Premium() {
       <View style={styles.cardHeaderRow}>
         <Text style={styles.cardTitle}>PREMIUM</Text>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {isCurrent && <Text style={styles.currentBadge}>Current</Text>}
-          <Text style={styles.price}>₱149 / month</Text>
+          {isCurrent && <Text style={styles.currentBadgePremium}>Current</Text>}
+          <Text style={styles.pricePremium}>₱149 / month</Text>
         </View>
       </View>
 
       <View style={styles.features}>
-        <Feature text="Everything in PLUS+" />
-        <Feature text="Unlimited medication & hydration tracking" />
-        <Feature text="Data export" />
-        <Feature text="Priority customer support" />
-        <Feature text="Advanced scheduling" />
-        <Feature text="Extended history" />
-        <Feature text="Smart insights & recommendations" />
+        <Feature text="Everything in PLUS+" color="#F59E0B" />
+        <Feature text="Unlimited medication & hydration tracking" color="#F59E0B" />
+        <Feature text="Data export" color="#F59E0B" />
+        <Feature text="Priority customer support" color="#F59E0B" />
+        <Feature text="Advanced scheduling" color="#F59E0B" />
+        <Feature text="Extended history" color="#F59E0B" />
+        <Feature text="Smart insights & recommendations" color="#F59E0B" />
       </View>
 
       <TouchableOpacity
@@ -187,10 +187,10 @@ export default function Premium() {
   );
 }
 
-function Feature({ text }: { text: string }) {
+function Feature({ text, color = '#10B981' }: { text: string; color?: string }) {
   return (
     <View style={styles.featureRow}>
-      <Ionicons name="checkmark-circle" size={18} color="#10B981" />
+      <Ionicons name="checkmark-circle" size={18} color={color} />
       <Text style={styles.featureText}>{text}</Text>
     </View>
   );
@@ -236,32 +236,53 @@ const styles = StyleSheet.create({
   lead: { color: '#6B7280', marginBottom: 16 },
 
   card: { backgroundColor: 'white', borderRadius: 14, padding: 16, marginBottom: 16, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 6, elevation: 3 },
-  freeCard: {},
-  plusCard: {},
-  premiumCard: {},
+  freeCard: { borderLeftWidth: 3, borderLeftColor: '#9CA3AF' },
+  plusCard: { borderLeftWidth: 3, borderLeftColor: '#60A5FA' },
+  premiumCard: { borderLeftWidth: 3, borderLeftColor: '#F59E0B' },
 
   cardHeader: { marginBottom: 8 },
   cardHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   cardTitle: { fontSize: 16, fontWeight: '800', color: '#111827' },
   cardSubtitle: { color: '#6B7280', fontSize: 13 },
   price: { fontSize: 14, fontWeight: '700', color: '#1E3A8A' },
+  pricePlus: { fontSize: 14, fontWeight: '700', color: '#3B82F6' },
+  pricePremium: { fontSize: 14, fontWeight: '700', color: '#F59E0B' },
 
   features: { marginTop: 4, marginBottom: 12 },
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginVertical: 6 },
   featureText: { color: '#374151', flex: 1, marginLeft: 8 },
 
   cardFooter: { flexDirection: 'row', justifyContent: 'flex-end' },
-  unlockedBadge: { backgroundColor: '#ECFDF5', color: '#065F46', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, fontWeight: '700' },
+  unlockedBadge: { backgroundColor: '#F3F4F6', color: '#6B7280', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 12, fontWeight: '700' },
 
   ctaButton: { backgroundColor: '#1E3A8A', paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
+  ctaButtonPlus: { backgroundColor: '#3B82F6', paddingVertical: 12, borderRadius: 12, alignItems: 'center' },
   ctaText: { color: 'white', fontWeight: '700' },
-  premiumCta: { backgroundColor: '#111827' },
-  premiumCtaText: { color: '#F8FAFC' },
+  premiumCta: { backgroundColor: '#F59E0B' },
+  premiumCtaText: { color: 'white' },
   ctaButtonDisabled: { opacity: 0.7 },
   currentCard: { borderWidth: 2, borderColor: '#10B981' },
   currentBadge: {
     backgroundColor: '#ECFDF5',
     color: '#065F46',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  currentBadgePlus: {
+    backgroundColor: '#EFF6FF',
+    color: '#1E40AF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    fontWeight: '700',
+    fontSize: 12,
+  },
+  currentBadgePremium: {
+    backgroundColor: '#FFFBEB',
+    color: '#92400E',
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 12,

@@ -24,28 +24,6 @@ export default function Settings() {
   // Medication Settings
   const [flexibleSchedule, setFlexibleSchedule] = useState(true);
 
-  const handleLogout = async () => {
-    Alert.alert(
-      'Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Logout',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await AsyncStorage.removeItem('token');
-              router.replace('/login');
-            } catch (err) {
-              console.error('Logout error:', err);
-            }
-          }
-        }
-      ]
-    );
-  };
-
   const settingsGroups = [
     {
       title: 'App Behavior',
@@ -266,12 +244,6 @@ export default function Settings() {
           </View>
         ))}
 
-        {/* Sign Out Button */}
-        <TouchableOpacity style={styles.signOutButton} onPress={handleLogout}>
-          <Ionicons name="log-out-outline" size={20} color="#EF4444" />
-          <Text style={styles.signOutText}>Sign Out</Text>
-        </TouchableOpacity>
-
         <View style={styles.bottomSpacing} />
       </ScrollView>
 
@@ -391,28 +363,6 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F3F4F6',
     marginLeft: 68,
-  },
-  signOutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'white',
-    borderRadius: 12,
-    paddingVertical: 16,
-    marginBottom: 24,
-    borderWidth: 1,
-    borderColor: '#FEE2E2',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  signOutText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#EF4444',
-    marginLeft: 8,
   },
   bottomSpacing: {
     height: 100,

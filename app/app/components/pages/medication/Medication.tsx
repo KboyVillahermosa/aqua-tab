@@ -54,6 +54,7 @@ export default function Medication() {
   const [exporting, setExporting] = useState(false);
   const [medicineSuggestions, setMedicineSuggestions] = useState<any[]>([]);
   const [showMedicineSuggestions, setShowMedicineSuggestions] = useState(false);
+  const [lastClearedTime, setLastClearedTime] = useState<number>(0);
 
   // form state
   const [name, setName] = useState('');
@@ -152,6 +153,16 @@ export default function Medication() {
             setHistory(allHistory);
           } else {
             console.log('Failed to load history:', historyResults.reason);
+          }
+
+          // Load last cleared timestamp
+          try {
+            const clearedTime = await AsyncStorage.getItem('medication_history_cleared_time');
+            if (clearedTime) {
+              setLastClearedTime(parseInt(clearedTime, 10));
+            }
+          } catch (error) {
+            console.log('Error loading cleared time:', error);
           }
 
           // Set stats
@@ -748,16 +759,18 @@ export default function Medication() {
   }
 
 
-  function clearHistory() {
-    Alert.alert('Clear history', 'Remove all medication history?', [
+  async function clearHistory() {
+    Alert.alert('Clear History', 'This will hide all visible history entries. Medical data will be preserved.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Clear', style: 'destructive', onPress: async () => {
-        setHistory([]);
-        // Also clear from local storage
+        const now = Date.now();
         try {
-          await AsyncStorage.removeItem(STORAGE_KEYS.HISTORY);
+          await AsyncStorage.setItem('medication_history_cleared_time', now.toString());
+          setLastClearedTime(now);
+          Alert.alert('Success', 'History cleared');
         } catch (error) {
-          console.log('Error clearing history from storage:', error);
+          console.log('Error saving cleared time:', error);
+          Alert.alert('Error', 'Failed to clear history');
         }
       }},
     ]);
@@ -1064,7 +1077,10 @@ export default function Medication() {
               if (!medExists && h.medId) {
                 console.log('History entry with medId', h.medId, 'has no matching medication');
               }
-              return medExists;
+              // Filter out entries older than last cleared time
+              const entryTime = new Date(h.time).getTime();
+              const isAfterClear = entryTime > lastClearedTime;
+              return medExists && isAfterClear;
             });
             
             console.log('Valid history entries after filtering:', validHistory.length);

@@ -314,7 +314,15 @@
                                 <div>
                                     <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Age</p>
                                     <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->age ?? 'Not provided' }}
+                                        @php
+                                        $ageDisplay = 'Not provided';
+                                        $dob = $user->date_of_birth ?? $user->dob;
+                                        if ($dob) {
+                                        $birthDate = new DateTime($dob);
+                                        $ageDisplay = $birthDate->diff(new DateTime())->y;
+                                        }
+                                        @endphp
+                                        {{ $ageDisplay }}
                                     </p>
                                 </div>
                             </div>
@@ -355,12 +363,6 @@
                                     <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Phone</p>
                                     <p class="text-lg font-semibold text-slate-900 mt-1">
                                         {{ $user->emergency_contact_phone ?? 'Not provided' }}
-                                    </p>
-                                </div>
-                                <div>
-                                    <p class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Relationship</p>
-                                    <p class="text-lg font-semibold text-slate-900 mt-1">
-                                        {{ $user->emergency_contact ?? 'Not provided' }}
                                     </p>
                                 </div>
                             </div>
